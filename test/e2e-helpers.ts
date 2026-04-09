@@ -396,7 +396,7 @@ export async function proveAndExecute(params: {
   // Pool's __execute__ expects Array<Call> — wrap client actions as a call to compile_actions
   const chainId = await provider.getChainId();
   const latestBlock = await provider.getBlockNumber();
-  const proveBlock = latestBlock - 460;
+  const proveBlock = latestBlock - 20;
   console.log('  Prove block:', proveBlock, '(latest:', latestBlock, ')');
   const poolNonce = await provider.getNonceForAddress(PRIVACY_POOL_ADDRESS, { blockIdentifier: proveBlock });
   const poolNonceHex = poolNonce.startsWith('0x') ? poolNonce : '0x' + BigInt(poolNonce).toString(16);
