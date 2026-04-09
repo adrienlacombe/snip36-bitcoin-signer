@@ -370,13 +370,23 @@ export async function directInvoke(params: {
 // ============================================================
 
 /**
- * Compile actions → sign for prover → prove → execute on-chain with proof_facts.
- * Required for all privacy pool operations (set viewing key, deposit, withdraw).
+ * Prove client actions via the privacy pool (sender = pool), then execute
+ * on-chain with the returned proof_facts.
+ *
+ * The privacy pool IS an account contract. During proving:
+ *   - sender_address = POOL (not user)
+ *   - Pool's __execute__ calls compile_actions + assert_valid_signature
+ *   - Pool's __validate__ only checks tip=0, prices=0
+ *   - User signs the tx hash so the pool can verify via is_valid_signature
+ *
+ * After proving, the on-chain submission sends apply_actions(serverActions)
+ * through the user's account with proof + proof_facts attached.
  */
 export async function proveAndExecute(params: {
   privateKeyHex: string;
   starknetAddress: string;
-  calls: Array<{ contractAddress: string; entrypoint: string; calldata: string[] }>;
+  clientActions: string[];   // Raw client actions for the prover [addr, key, n, ...actions]
+  serverActions: string[];   // From compile_actions, for apply_actions calldata
 }): Promise<string> {
   if (!PROVING_SERVICE_URL) throw new Error('VITE_PROVING_SERVICE_URL not set');
 
@@ -387,33 +397,24 @@ export async function proveAndExecute(params: {
   const signer = new EthSigner(prefixedKey);
   const account = new Account({ provider, address: params.starknetAddress, signer });
 
-  const calls = params.calls.map((c) => ({
-    contractAddress: c.contractAddress,
-    entrypoint: c.entrypoint,
-    calldata: c.calldata,
-  }));
-
-  // Step 1: Build compiled calldata the way Account does
-  const rawCalldata = CallData.toCalldata(calls);
-  const compiledCalldata = [calls.length.toString(), ...rawCalldata];
-
-  // Step 2: Hash the transaction with zero resource bounds (prover requirement)
+  // Step 1: Build proving tx with sender = POOL
   const chainId = await provider.getChainId();
-  const nonce = await provider.getNonceForAddress(params.starknetAddress);
-  const nonceHex = nonce.startsWith('0x') ? nonce : '0x' + BigInt(nonce).toString(16);
+  const poolNonce = await provider.getNonceForAddress(PRIVACY_POOL_ADDRESS);
+  const poolNonceHex = poolNonce.startsWith('0x') ? poolNonce : '0x' + BigInt(poolNonce).toString(16);
+  const clientCalldata = params.clientActions.map(toHexStr);
 
   const proveResourceBounds = {
     l1_gas: { max_amount: 0x0n, max_price_per_unit: 0x0n },
-    l2_gas: { max_amount: 0x5F5E100n, max_price_per_unit: 0x0n },
+    l2_gas: { max_amount: 0x20000000n, max_price_per_unit: 0x0n },
     l1_data_gas: { max_amount: 0x0n, max_price_per_unit: 0x0n },
   };
 
   const txHash = hash.calculateInvokeTransactionHash({
-    senderAddress: params.starknetAddress,
+    senderAddress: PRIVACY_POOL_ADDRESS,
     version: '0x3',
-    compiledCalldata,
+    compiledCalldata: clientCalldata,
     chainId,
-    nonce: nonceHex,
+    nonce: poolNonceHex,
     accountDeploymentData: [],
     nonceDataAvailabilityMode: 0,
     feeDataAvailabilityMode: 0,
@@ -422,11 +423,11 @@ export async function proveAndExecute(params: {
     tip: 0n,
   });
 
-  // Step 3: Sign for the prover
+  // Step 2: User signs the tx hash (pool verifies via is_valid_signature on user account)
   console.log('  Signing for proving service...');
   const signature = await signStarknetHash(params.privateKeyHex, txHash);
 
-  // Step 4: Send to proving service
+  // Step 3: Send to proving service
   console.log('  Calling proving service...');
   const proveResponse = await fetch(PROVING_SERVICE_URL, {
     method: 'POST',
@@ -439,13 +440,13 @@ export async function proveAndExecute(params: {
         transaction: {
           type: 'INVOKE',
           version: '0x3',
-          sender_address: params.starknetAddress,
-          calldata: compiledCalldata.map(toHexStr),
+          sender_address: PRIVACY_POOL_ADDRESS,
+          calldata: clientCalldata,
           signature: [...signature],
-          nonce: nonceHex,
+          nonce: poolNonceHex,
           resource_bounds: {
             l1_gas: { max_amount: '0x0', max_price_per_unit: '0x0' },
-            l2_gas: { max_amount: '0x5F5E100', max_price_per_unit: '0x0' },
+            l2_gas: { max_amount: '0x20000000', max_price_per_unit: '0x0' },
             l1_data_gas: { max_amount: '0x0', max_price_per_unit: '0x0' },
           },
           tip: '0x0',
@@ -468,23 +469,33 @@ export async function proveAndExecute(params: {
   const proof = proveResult.result?.proof || '';
   console.log(`  Proof obtained: ${proofFacts.length} proof_facts, ${proof.length} chars proof`);
 
-  // Step 5: Execute on-chain with proof_facts and dynamic gas prices
+  // Step 4: Execute on-chain — user calls apply_actions(serverActions) with proof_facts
   console.log('  Executing on-chain with proof_facts...');
+  const userNonce = await provider.getNonceForAddress(params.starknetAddress);
+  const userNonceHex = userNonce.startsWith('0x') ? userNonce : '0x' + BigInt(userNonce).toString(16);
+
   const block = await provider.getBlockWithReceipts('latest') as any;
   const l1Price = BigInt(block.l1_gas_price?.price_in_fri ?? '0x400000000000');
   const l1DataPrice = BigInt(block.l1_data_gas_price?.price_in_fri ?? '0x20000');
   const l2Price = BigInt(block.l2_gas_price?.price_in_fri ?? '0x4000000000');
 
-  const result = await account.execute(calls, {
-    nonce: nonceHex,
-    proofFacts,
-    proof,
-    resourceBounds: {
-      l1_gas: { max_amount: 0x400n, max_price_per_unit: l1Price * 2n },
-      l2_gas: { max_amount: 0xE000000n, max_price_per_unit: l2Price * 2n },
-      l1_data_gas: { max_amount: 0x400n, max_price_per_unit: l1DataPrice * 2n },
-    },
-  } as any);
+  const result = await account.execute(
+    [{
+      contractAddress: PRIVACY_POOL_ADDRESS,
+      entrypoint: 'apply_actions',
+      calldata: params.serverActions,
+    }],
+    {
+      nonce: userNonceHex,
+      proofFacts,
+      proof,
+      resourceBounds: {
+        l1_gas: { max_amount: 0x200n, max_price_per_unit: l1Price * 2n },
+        l2_gas: { max_amount: 0x20000000n, max_price_per_unit: l2Price * 2n },
+        l1_data_gas: { max_amount: 0x800n, max_price_per_unit: l1DataPrice * 2n },
+      },
+    } as any,
+  );
 
   return result.transaction_hash;
 }

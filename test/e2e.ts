@@ -181,20 +181,18 @@ async function deposit() {
 
   if (needsViewingKey) {
     console.log('\nSetting viewing key via proving service...');
-    const vkCompile = await provider.callContract({
+    const vkClientActions = [address, privacyKey, '1', '0', randomFelt()];
+    const vkServerActions = await provider.callContract({
       contractAddress: PRIVACY_POOL_ADDRESS,
       entrypoint: 'compile_actions',
-      calldata: [address, privacyKey, '1', '0', randomFelt()],
+      calldata: vkClientActions,
     });
     console.log('  Compiled, proving and executing...');
     const vkTx = await proveAndExecute({
       privateKeyHex: TEST_PRIVATE_KEY,
       starknetAddress: address,
-      calls: [{
-        contractAddress: PRIVACY_POOL_ADDRESS,
-        entrypoint: 'apply_actions',
-        calldata: [...vkCompile],
-      }],
+      clientActions: vkClientActions,
+      serverActions: [...vkServerActions],
     });
     console.log('  ViewingKey TX:', vkTx);
     const vkStatus = await waitForTx(vkTx);
@@ -205,32 +203,28 @@ async function deposit() {
   console.log('\nCompiling deposit action...');
   console.log(`  Deposit amount: ${formatStrk(depositAmount)}`);
 
-  const depositCompile = await provider.callContract({
+  const depositClientActions = [
+    address,
+    privacyKey,
+    '1',                            // 1 action
+    '5',                            // Deposit variant index
+    STRK_TOKEN_ADDRESS,             // token
+    depositAmount.toString(),       // amount
+  ];
+  const depositServerActions = await provider.callContract({
     contractAddress: PRIVACY_POOL_ADDRESS,
     entrypoint: 'compile_actions',
-    calldata: [
-      address,
-      privacyKey,
-      '1',                            // 1 action
-      '5',                            // Deposit variant index
-      STRK_TOKEN_ADDRESS,             // token
-      depositAmount.toString(),       // amount
-    ],
+    calldata: depositClientActions,
   });
-  console.log('  Server actions:', depositCompile.length, 'felts');
+  console.log('  Server actions:', depositServerActions.length, 'felts');
 
   // Step 2d: Prove and execute apply_actions (deposit)
   console.log('\nProving and executing apply_actions (deposit)...');
   const applyTxHash = await proveAndExecute({
     privateKeyHex: TEST_PRIVATE_KEY,
     starknetAddress: address,
-    calls: [
-      {
-        contractAddress: PRIVACY_POOL_ADDRESS,
-        entrypoint: 'apply_actions',
-        calldata: [...depositCompile],
-      },
-    ],
+    clientActions: depositClientActions,
+    serverActions: [...depositServerActions],
   });
   console.log('  Apply TX:', applyTxHash);
   const applyStatus = await waitForTx(applyTxHash);
@@ -267,9 +261,12 @@ async function withdraw() {
   crypto.getRandomValues(randomBytes);
   const withdrawRandom = '0x' + Array.from(randomBytes).map((b) => b.toString(16).padStart(2, '0')).join('');
 
-  // Build withdraw action
+  // Build withdraw client actions
   // Withdraw variant (index 7): to_addr, token, amount, random
-  const clientActions = [
+  const withdrawClientActions = [
+    address,
+    privacyKey,
+    '1',                        // 1 action
     '7',                        // Withdraw variant index
     address,                    // to_addr (withdraw to self)
     STRK_TOKEN_ADDRESS,         // token
@@ -280,30 +277,20 @@ async function withdraw() {
   // Compile actions
   console.log('Compiling withdraw action...');
   const provider = getProvider();
-  const compileResult = await provider.callContract({
+  const withdrawServerActions = await provider.callContract({
     contractAddress: PRIVACY_POOL_ADDRESS,
     entrypoint: 'compile_actions',
-    calldata: [
-      address,
-      privacyKey,
-      '1',              // 1 action
-      ...clientActions,
-    ],
+    calldata: withdrawClientActions,
   });
-  console.log('  Server actions:', compileResult.length, 'felts');
+  console.log('  Server actions:', withdrawServerActions.length, 'felts');
 
   // Prove and execute apply_actions (withdraw)
   console.log('\nProving and executing apply_actions (withdraw)...');
   const txHash = await proveAndExecute({
     privateKeyHex: TEST_PRIVATE_KEY,
     starknetAddress: address,
-    calls: [
-      {
-        contractAddress: PRIVACY_POOL_ADDRESS,
-        entrypoint: 'apply_actions',
-        calldata: [...compileResult],
-      },
-    ],
+    clientActions: withdrawClientActions,
+    serverActions: [...withdrawServerActions],
   });
   console.log('  Withdraw TX:', txHash);
   const status = await waitForTx(txHash);
