@@ -14,7 +14,7 @@ env:
 
 jobs:
   e2e:
-    name: Setup → Deposit+Withdraw
+    name: Privacy Pool Integration
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -39,5 +39,5 @@ jobs:
       - name: Setup — deploy account
         run: npx tsx test/e2e.ts setup
 
-      - name: Deposit + Withdraw (proves full privacy pool pipeline)
+      - name: Privacy pool — compile, prove, submit
         run: npx tsx test/e2e.ts deposit
