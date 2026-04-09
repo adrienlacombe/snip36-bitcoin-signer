@@ -398,10 +398,18 @@ export async function proveAndExecute(params: {
   const account = new Account({ provider, address: params.starknetAddress, signer });
 
   // Step 1: Build proving tx with sender = POOL
+  // Pool's __execute__ expects Array<Call> — wrap client actions as a call to compile_actions
   const chainId = await provider.getChainId();
   const poolNonce = await provider.getNonceForAddress(PRIVACY_POOL_ADDRESS);
   const poolNonceHex = poolNonce.startsWith('0x') ? poolNonce : '0x' + BigInt(poolNonce).toString(16);
-  const clientCalldata = params.clientActions.map(toHexStr);
+  const innerCalldata = params.clientActions.map(toHexStr);
+  const clientCalldata = [
+    '0x1',                                                       // num_calls
+    PRIVACY_POOL_ADDRESS,                                        // to (self-call)
+    selectorUtil.getSelectorFromName('compile_actions'),          // selector
+    '0x' + innerCalldata.length.toString(16),                    // calldata_len
+    ...innerCalldata,                                            // calldata
+  ];
 
   const proveResourceBounds = {
     l1_gas: { max_amount: 0x0n, max_price_per_unit: 0x0n },
