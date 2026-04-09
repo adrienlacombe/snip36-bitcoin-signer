@@ -395,7 +395,10 @@ export async function proveAndExecute(params: {
   // Step 1: Build proving tx with sender = POOL
   // Pool's __execute__ expects Array<Call> — wrap client actions as a call to compile_actions
   const chainId = await provider.getChainId();
-  const poolNonce = await provider.getNonceForAddress(PRIVACY_POOL_ADDRESS);
+  const latestBlock = await provider.getBlockNumber();
+  const proveBlock = latestBlock - 460;
+  console.log('  Prove block:', proveBlock, '(latest:', latestBlock, ')');
+  const poolNonce = await provider.getNonceForAddress(PRIVACY_POOL_ADDRESS, { blockIdentifier: proveBlock });
   const poolNonceHex = poolNonce.startsWith('0x') ? poolNonce : '0x' + BigInt(poolNonce).toString(16);
   const innerCalldata = params.clientActions.map(toHexStr);
   const clientCalldata = [
@@ -439,7 +442,7 @@ export async function proveAndExecute(params: {
       jsonrpc: '2.0',
       method: 'starknet_proveTransaction',
       params: {
-        block_id: 'latest',
+        block_id: { block_number: proveBlock },
         transaction: {
           type: 'INVOKE',
           version: '0x3',
