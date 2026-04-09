@@ -5,7 +5,7 @@
 import { keccak256 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
-import { RpcProvider, hash, CallData, typedData as starknetTypedData, selector as selectorUtil, EthSigner, Account } from 'starknet';
+import { RpcProvider, hash, CallData, typedData as starknetTypedData, selector as selectorUtil, EthSigner, Account, transaction } from 'starknet';
 
 // ============================================================
 // Config
@@ -391,11 +391,6 @@ export async function proveAndExecute(params: {
   if (!PROVING_SERVICE_URL) throw new Error('VITE_PROVING_SERVICE_URL not set');
 
   const provider = getProvider();
-  const prefixedKey = params.privateKeyHex.startsWith('0x')
-    ? params.privateKeyHex
-    : '0x' + params.privateKeyHex;
-  const signer = new EthSigner(prefixedKey);
-  const account = new Account({ provider, address: params.starknetAddress, signer });
 
   // Step 1: Build proving tx with sender = POOL
   // Pool's __execute__ expects Array<Call> — wrap client actions as a call to compile_actions
@@ -477,50 +472,89 @@ export async function proveAndExecute(params: {
   const proof = proveResult.result?.proof || '';
   console.log(`  Proof obtained: ${proofFacts.length} proof_facts, ${proof.length} chars proof`);
 
-  // Step 4: Execute on-chain — user calls apply_actions(serverActions) with proof_facts
-  console.log('  Executing on-chain with proof_facts...');
+  // Step 4: Build on-chain tx and submit via raw RPC
+  // Must compute tx hash WITH proof_facts, sign it, and submit with proof + proof_facts
+  console.log('  Building on-chain tx with proof_facts...');
   const userNonce = await provider.getNonceForAddress(params.starknetAddress);
   const userNonceHex = userNonce.startsWith('0x') ? userNonce : '0x' + BigInt(userNonce).toString(16);
-  console.log('  User nonce:', userNonceHex);
 
   const block = await provider.getBlockWithReceipts('latest') as any;
   const l1Price = BigInt(block.l1_gas_price?.price_in_fri ?? '0x400000000000');
   const l1DataPrice = BigInt(block.l1_data_gas_price?.price_in_fri ?? '0x20000');
   const l2Price = BigInt(block.l2_gas_price?.price_in_fri ?? '0x4000000000');
-  console.log('  Gas prices — l1:', l1Price, 'l2:', l2Price, 'l1data:', l1DataPrice);
+  console.log('  User nonce:', userNonceHex, 'l1:', l1Price, 'l2:', l2Price, 'l1data:', l1DataPrice);
 
-  try {
-    const result = await account.execute(
-      [{
-        contractAddress: PRIVACY_POOL_ADDRESS,
-        entrypoint: 'apply_actions',
-        calldata: params.serverActions,
-      }],
-      {
-        nonce: userNonceHex,
-        proofFacts,
-        proof,
-        resourceBounds: {
-          l1_gas: { max_amount: 0x200n, max_price_per_unit: l1Price * 2n },
-          l2_gas: { max_amount: 0x20000000n, max_price_per_unit: l2Price * 2n },
-          l1_data_gas: { max_amount: 0x800n, max_price_per_unit: l1DataPrice * 2n },
+  const applyCalldata = transaction.getExecuteCalldata(
+    [{ contractAddress: PRIVACY_POOL_ADDRESS, entrypoint: 'apply_actions', calldata: params.serverActions }],
+    '1',
+  ).map(toHexStr);
+
+  const onchainRb = {
+    l1_gas: { max_amount: 0x200n, max_price_per_unit: l1Price * 2n },
+    l2_gas: { max_amount: 0x20000000n, max_price_per_unit: l2Price * 2n },
+    l1_data_gas: { max_amount: 0x800n, max_price_per_unit: l1DataPrice * 2n },
+  };
+
+  // Compute tx hash WITH proof_facts included (required by starknet v0.10.2)
+  const onchainTxHash = hash.calculateInvokeTransactionHash({
+    senderAddress: params.starknetAddress,
+    version: '0x3',
+    compiledCalldata: applyCalldata,
+    chainId,
+    nonce: userNonceHex,
+    accountDeploymentData: [],
+    nonceDataAvailabilityMode: 0,
+    feeDataAvailabilityMode: 0,
+    paymasterData: [],
+    resourceBounds: onchainRb,
+    tip: 0n,
+    proofFacts: proofFacts.map((f: string) => BigInt(f)),
+  });
+  console.log('  On-chain TX hash:', onchainTxHash);
+
+  // Sign the hash (includes proof_facts)
+  const onchainSig = await signStarknetHash(params.privateKeyHex, onchainTxHash);
+
+  // Submit via raw RPC with proof_facts + proof in the tx body
+  console.log('  Submitting on-chain...');
+  const submitRes = await fetch(STARKNET_RPC_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'starknet_addInvokeTransaction',
+      params: {
+        invoke_transaction: {
+          type: 'INVOKE',
+          version: '0x3',
+          sender_address: params.starknetAddress,
+          calldata: applyCalldata,
+          signature: onchainSig,
+          nonce: userNonceHex,
+          resource_bounds: {
+            l1_gas: { max_amount: toHexStr(onchainRb.l1_gas.max_amount.toString()), max_price_per_unit: toHexStr(onchainRb.l1_gas.max_price_per_unit.toString()) },
+            l2_gas: { max_amount: toHexStr(onchainRb.l2_gas.max_amount.toString()), max_price_per_unit: toHexStr(onchainRb.l2_gas.max_price_per_unit.toString()) },
+            l1_data_gas: { max_amount: toHexStr(onchainRb.l1_data_gas.max_amount.toString()), max_price_per_unit: toHexStr(onchainRb.l1_data_gas.max_price_per_unit.toString()) },
+          },
+          tip: '0x0',
+          paymaster_data: [],
+          account_deployment_data: [],
+          nonce_data_availability_mode: 'L1',
+          fee_data_availability_mode: 'L1',
+          proof_facts: proofFacts,
+          proof,
         },
-      } as any,
-    );
+      },
+      id: 1,
+    }),
+  });
 
-    return result.transaction_hash;
-  } catch (e: any) {
-    // Extract the actual RPC error without the massive proof dump
-    const msg = e.message || String(e);
-    // RPC errors from starknet.js: look for Code/Message after params
-    const codeMatch = msg.match(/Code:\s*(\d+)/);
-    const msgMatch = msg.match(/Message:\s*"?([^"]+)"?/);
-    const validationMatch = msg.match(/(Account validation failed[^"]*)/);
-    const resourceMatch = msg.match(/(Resource bounds[^"]*)/);
-    const detail = validationMatch?.[1] || resourceMatch?.[1] || msgMatch?.[1] || '';
-    const code = codeMatch?.[1] || 'unknown';
-    throw new Error(`On-chain execution failed (code ${code}): ${detail || msg.slice(0, 300)}`);
+  const submitData = await submitRes.json();
+  if (submitData.error) {
+    throw new Error(`On-chain submit failed: ${JSON.stringify(submitData.error).slice(0, 500)}`);
   }
+
+  return submitData.result.transaction_hash;
 }
 
 // ============================================================
