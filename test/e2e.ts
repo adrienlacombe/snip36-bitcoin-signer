@@ -19,11 +19,13 @@ import {
   derivePrivacyKey,
   signAndExecuteInvoke,
   directInvoke,
+  proveAndExecute,
   formatStrk,
   getProvider,
   PRIVACY_POOL_ADDRESS,
   STRK_TOKEN_ADDRESS,
   AVNU_API_KEY,
+  PROVING_SERVICE_URL,
 } from './e2e-helpers';
 
 // ============================================================
@@ -178,14 +180,14 @@ async function deposit() {
   }
 
   if (needsViewingKey) {
-    console.log('\nSetting viewing key...');
+    console.log('\nSetting viewing key via proving service...');
     const vkCompile = await provider.callContract({
       contractAddress: PRIVACY_POOL_ADDRESS,
       entrypoint: 'compile_actions',
       calldata: [address, privacyKey, '1', '0', randomFelt()],
     });
-    console.log('  Compiled, executing via direct invoke...');
-    const vkTx = await directInvoke({
+    console.log('  Compiled, proving and executing...');
+    const vkTx = await proveAndExecute({
       privateKeyHex: TEST_PRIVATE_KEY,
       starknetAddress: address,
       calls: [{
@@ -199,7 +201,7 @@ async function deposit() {
     assert(vkStatus === 'accepted', 'SetViewingKey transaction rejected');
   }
 
-  // Step 2c: Deposit — compile and execute separately
+  // Step 2c: Deposit — compile, prove, and execute
   console.log('\nCompiling deposit action...');
   console.log(`  Deposit amount: ${formatStrk(depositAmount)}`);
 
@@ -217,9 +219,9 @@ async function deposit() {
   });
   console.log('  Server actions:', depositCompile.length, 'felts');
 
-  // Step 2d: Execute apply_actions via direct invoke (not AVNU — privacy pool needs proof_facts)
-  console.log('\nExecuting apply_actions (deposit) via direct invoke...');
-  const applyTxHash = await directInvoke({
+  // Step 2d: Prove and execute apply_actions (deposit)
+  console.log('\nProving and executing apply_actions (deposit)...');
+  const applyTxHash = await proveAndExecute({
     privateKeyHex: TEST_PRIVATE_KEY,
     starknetAddress: address,
     calls: [
@@ -290,9 +292,9 @@ async function withdraw() {
   });
   console.log('  Server actions:', compileResult.length, 'felts');
 
-  // Execute apply_actions via direct invoke
-  console.log('\nExecuting apply_actions (withdraw) via direct invoke...');
-  const txHash = await directInvoke({
+  // Prove and execute apply_actions (withdraw)
+  console.log('\nProving and executing apply_actions (withdraw)...');
+  const txHash = await proveAndExecute({
     privateKeyHex: TEST_PRIVATE_KEY,
     starknetAddress: address,
     calls: [
@@ -324,7 +326,12 @@ async function main() {
     console.error('ERROR: Set VITE_AVNU_API_KEY environment variable');
     process.exit(1);
   }
+  if (!PROVING_SERVICE_URL) {
+    console.error('ERROR: Set VITE_PROVING_SERVICE_URL environment variable');
+    process.exit(1);
+  }
   console.log('AVNU API key: configured');
+  console.log('Proving service: configured');
 
   const step = process.argv[2] || 'setup';
 

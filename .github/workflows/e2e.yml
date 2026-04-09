@@ -35,6 +35,7 @@ jobs:
           VITE_STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
           VITE_AVNU_API_KEY: ${{ secrets.AVNU_API_KEY }}
           VITE_AVNU_PAYMASTER_URL: ${{ secrets.AVNU_PAYMASTER_URL }}
+          VITE_PROVING_SERVICE_URL: ${{ secrets.PROVING_SERVICE_URL }}
         run: npx tsx test/e2e.ts setup
 
       - name: Deposit STRK into privacy pool
@@ -42,6 +43,7 @@ jobs:
           VITE_STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
           VITE_AVNU_API_KEY: ${{ secrets.AVNU_API_KEY }}
           VITE_AVNU_PAYMASTER_URL: ${{ secrets.AVNU_PAYMASTER_URL }}
+          VITE_PROVING_SERVICE_URL: ${{ secrets.PROVING_SERVICE_URL }}
         run: npx tsx test/e2e.ts deposit
 
       - name: Withdraw STRK from privacy pool
@@ -49,4 +51,5 @@ jobs:
           VITE_STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
           VITE_AVNU_API_KEY: ${{ secrets.AVNU_API_KEY }}
           VITE_AVNU_PAYMASTER_URL: ${{ secrets.AVNU_PAYMASTER_URL }}
+          VITE_PROVING_SERVICE_URL: ${{ secrets.PROVING_SERVICE_URL }}
         run: npx tsx test/e2e.ts withdraw
