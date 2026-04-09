@@ -199,17 +199,19 @@ async function deposit() {
     assert(vkStatus === 'accepted', 'SetViewingKey transaction rejected');
   }
 
-  // Step 2c: Deposit + Withdraw (to self) in one action set
-  // Deposit alone triggers NO_REPLAY_PROTECTION; Withdraw includes a random salt (WriteOnce).
-  // Net effect: tokens move through the privacy pool and back = proves the full flow.
+  // Step 2c: Deposit + Withdraw in one action set (with SetViewingKey for replay protection)
+  // compile_actions requires a WriteOnce action. SetViewingKey(random) satisfies this.
+  // We bundle: SetViewingKey(re-register) + Deposit + Withdraw(to self, same amount).
+  // Net effect: tokens flow through the pool and back = proves the full pipeline.
   console.log('\nCompiling deposit + withdraw action...');
   console.log(`  Deposit amount: ${formatStrk(depositAmount)}`);
 
   const depositClientActions = [
     address,
     privacyKey,
-    '2',                                // 2 actions
-    '5', STRK_TOKEN_ADDRESS, depositAmount.toString(),  // Deposit(token, amount)
+    '3',                                                            // 3 actions
+    '0', randomFelt(),                                              // SetViewingKey(random) — WriteOnce replay protection
+    '5', STRK_TOKEN_ADDRESS, depositAmount.toString(),              // Deposit(token, amount)
     '7', address, STRK_TOKEN_ADDRESS, depositAmount.toString(), randomFelt(), // Withdraw(to_self, token, amount, random)
   ];
   const depositServerActions = await provider.callContract({
@@ -219,8 +221,8 @@ async function deposit() {
   });
   console.log('  Server actions:', depositServerActions.length, 'felts');
 
-  // Step 2d: Prove and execute apply_actions (deposit)
-  console.log('\nProving and executing apply_actions (deposit)...');
+  // Step 2d: Prove and execute apply_actions (deposit + withdraw)
+  console.log('\nProving and executing apply_actions (deposit + withdraw)...');
   const applyTxHash = await proveAndExecute({
     privateKeyHex: TEST_PRIVATE_KEY,
     starknetAddress: address,

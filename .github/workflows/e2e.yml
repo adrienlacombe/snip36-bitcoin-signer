@@ -6,9 +6,15 @@ on:
     - cron: "0 6 * * *"
   workflow_dispatch:
 
+env:
+  VITE_STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
+  VITE_AVNU_API_KEY: ${{ secrets.AVNU_API_KEY }}
+  VITE_AVNU_PAYMASTER_URL: ${{ secrets.AVNU_PAYMASTER_URL }}
+  VITE_PROVING_SERVICE_URL: ${{ secrets.PROVING_SERVICE_URL }}
+
 jobs:
   e2e:
-    name: Setup → Deposit → Withdraw
+    name: Setup → Deposit+Withdraw
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -31,25 +37,7 @@ jobs:
         run: npm install
 
       - name: Setup — deploy account
-        env:
-          VITE_STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
-          VITE_AVNU_API_KEY: ${{ secrets.AVNU_API_KEY }}
-          VITE_AVNU_PAYMASTER_URL: ${{ secrets.AVNU_PAYMASTER_URL }}
-          VITE_PROVING_SERVICE_URL: ${{ secrets.PROVING_SERVICE_URL }}
         run: npx tsx test/e2e.ts setup
 
-      - name: Deposit STRK into privacy pool
-        env:
-          VITE_STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
-          VITE_AVNU_API_KEY: ${{ secrets.AVNU_API_KEY }}
-          VITE_AVNU_PAYMASTER_URL: ${{ secrets.AVNU_PAYMASTER_URL }}
-          VITE_PROVING_SERVICE_URL: ${{ secrets.PROVING_SERVICE_URL }}
+      - name: Deposit + Withdraw (proves full privacy pool pipeline)
         run: npx tsx test/e2e.ts deposit
-
-      - name: Withdraw STRK from privacy pool
-        env:
-          VITE_STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
-          VITE_AVNU_API_KEY: ${{ secrets.AVNU_API_KEY }}
-          VITE_AVNU_PAYMASTER_URL: ${{ secrets.AVNU_PAYMASTER_URL }}
-          VITE_PROVING_SERVICE_URL: ${{ secrets.PROVING_SERVICE_URL }}
-        run: npx tsx test/e2e.ts withdraw
