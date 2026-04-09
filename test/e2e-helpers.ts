@@ -481,31 +481,46 @@ export async function proveAndExecute(params: {
   console.log('  Executing on-chain with proof_facts...');
   const userNonce = await provider.getNonceForAddress(params.starknetAddress);
   const userNonceHex = userNonce.startsWith('0x') ? userNonce : '0x' + BigInt(userNonce).toString(16);
+  console.log('  User nonce:', userNonceHex);
 
   const block = await provider.getBlockWithReceipts('latest') as any;
   const l1Price = BigInt(block.l1_gas_price?.price_in_fri ?? '0x400000000000');
   const l1DataPrice = BigInt(block.l1_data_gas_price?.price_in_fri ?? '0x20000');
   const l2Price = BigInt(block.l2_gas_price?.price_in_fri ?? '0x4000000000');
+  console.log('  Gas prices — l1:', l1Price, 'l2:', l2Price, 'l1data:', l1DataPrice);
 
-  const result = await account.execute(
-    [{
-      contractAddress: PRIVACY_POOL_ADDRESS,
-      entrypoint: 'apply_actions',
-      calldata: params.serverActions,
-    }],
-    {
-      nonce: userNonceHex,
-      proofFacts,
-      proof,
-      resourceBounds: {
-        l1_gas: { max_amount: 0x200n, max_price_per_unit: l1Price * 2n },
-        l2_gas: { max_amount: 0x20000000n, max_price_per_unit: l2Price * 2n },
-        l1_data_gas: { max_amount: 0x800n, max_price_per_unit: l1DataPrice * 2n },
-      },
-    } as any,
-  );
+  try {
+    const result = await account.execute(
+      [{
+        contractAddress: PRIVACY_POOL_ADDRESS,
+        entrypoint: 'apply_actions',
+        calldata: params.serverActions,
+      }],
+      {
+        nonce: userNonceHex,
+        proofFacts,
+        proof,
+        resourceBounds: {
+          l1_gas: { max_amount: 0x200n, max_price_per_unit: l1Price * 2n },
+          l2_gas: { max_amount: 0x20000000n, max_price_per_unit: l2Price * 2n },
+          l1_data_gas: { max_amount: 0x800n, max_price_per_unit: l1DataPrice * 2n },
+        },
+      } as any,
+    );
 
-  return result.transaction_hash;
+    return result.transaction_hash;
+  } catch (e: any) {
+    // Extract the actual RPC error without the massive proof dump
+    const msg = e.message || String(e);
+    // RPC errors from starknet.js: look for Code/Message after params
+    const codeMatch = msg.match(/Code:\s*(\d+)/);
+    const msgMatch = msg.match(/Message:\s*"?([^"]+)"?/);
+    const validationMatch = msg.match(/(Account validation failed[^"]*)/);
+    const resourceMatch = msg.match(/(Resource bounds[^"]*)/);
+    const detail = validationMatch?.[1] || resourceMatch?.[1] || msgMatch?.[1] || '';
+    const code = codeMatch?.[1] || 'unknown';
+    throw new Error(`On-chain execution failed (code ${code}): ${detail || msg.slice(0, 300)}`);
+  }
 }
 
 // ============================================================
