@@ -1,0 +1,20 @@
+[package]
+name = "argent"
+version = "0.5.1"
+cairo-version = "2.15.0"
+edition = "2024_07"
+
+[[target.starknet-contract]]
+sierra = true
+casm = true
+allowed-libfuncs-list.name = "all"
+
+[dependencies]
+starknet = "2.15.0"
+openzeppelin_security = "1.0.0"
+
+[tool.fmt]
+max-line-length = 120
+sort-module-level-items = true
+
+[lib]

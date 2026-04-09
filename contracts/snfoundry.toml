@@ -1,0 +1,4 @@
+
+[sncast.casawybla-deployer]
+account = "casawybla-deployer"
+url = "https://rpc.starknet-testnet.lava.build"
