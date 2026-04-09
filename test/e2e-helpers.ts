@@ -348,12 +348,17 @@ export async function directInvoke(params: {
   }));
 
   console.log('  Executing via Account.execute(), calls:', calls.length);
-  // secp256k1 ecrecover in __validate__ needs ~10M+ l2 gas
+  // Fetch current block to derive gas prices, then add a 2x safety margin.
+  const block = await provider.getBlockWithReceipts('latest') as any;
+  const l1Price = BigInt(block.l1_gas_price?.price_in_fri ?? '0x400000000000');
+  const l1DataPrice = BigInt(block.l1_data_gas_price?.price_in_fri ?? '0x20000');
+  const l2Price = BigInt(block.l2_gas_price?.price_in_fri ?? '0x4000000000');
+
   const result = await account.execute(calls, {
     resourceBounds: {
-      l1_gas: { max_amount: 0x400n, max_price_per_unit: 0x400000000000n },
-      l2_gas: { max_amount: 0xE000000n, max_price_per_unit: 0x4000000000n },
-      l1_data_gas: { max_amount: 0x400n, max_price_per_unit: 0x20000n },
+      l1_gas: { max_amount: 0x400n, max_price_per_unit: l1Price * 2n },
+      l2_gas: { max_amount: 0xE000000n, max_price_per_unit: l2Price * 2n },
+      l1_data_gas: { max_amount: 0x400n, max_price_per_unit: l1DataPrice * 2n },
     },
   });
   return result.transaction_hash;
