@@ -1,0 +1,52 @@
+name: E2E Integration Tests (Sepolia)
+
+on:
+  schedule:
+    # Every day at 06:00 UTC
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    name: Setup → Deposit → Withdraw
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # The privacy SDK uses a local file: path that only exists on dev machines.
+      # E2E tests don't need it, so strip it before install.
+      - name: Remove local-only dependencies
+        run: |
+          jq 'del(.dependencies["@starkware-libs/starknet-privacy-sdk"])' package.json > package.tmp.json
+          mv package.tmp.json package.json
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Setup — deploy account
+        env:
+          VITE_STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
+          VITE_AVNU_API_KEY: ${{ secrets.AVNU_API_KEY }}
+          VITE_AVNU_PAYMASTER_URL: ${{ secrets.AVNU_PAYMASTER_URL }}
+        run: npx tsx test/e2e.ts setup
+
+      - name: Deposit STRK into privacy pool
+        env:
+          VITE_STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
+          VITE_AVNU_API_KEY: ${{ secrets.AVNU_API_KEY }}
+          VITE_AVNU_PAYMASTER_URL: ${{ secrets.AVNU_PAYMASTER_URL }}
+        run: npx tsx test/e2e.ts deposit
+
+      - name: Withdraw STRK from privacy pool
+        env:
+          VITE_STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
+          VITE_AVNU_API_KEY: ${{ secrets.AVNU_API_KEY }}
+          VITE_AVNU_PAYMASTER_URL: ${{ secrets.AVNU_PAYMASTER_URL }}
+        run: npx tsx test/e2e.ts withdraw
