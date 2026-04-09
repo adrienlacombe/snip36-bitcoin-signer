@@ -184,7 +184,56 @@ async function deposit() {
   assert(pubKeyCheck[0] !== '0x0' && pubKeyCheck[0] !== '0', 'Viewing key not set after registration');
   console.log('  On-chain viewing key:', pubKeyCheck[0].slice(0, 16) + '...');
 
-  console.log('\nINTEGRATION TEST PASSED!\n');
+  // Step 2c: Deposit + Withdraw through the privacy pool
+  // OpenChannel provides WriteOnce replay protection, Deposit+Withdraw net to zero balance.
+  const depositAmount = 1000000000000000n; // 0.001 STRK
+  console.log(`\nDeposit + Withdraw ${formatStrk(depositAmount)} through privacy pool...`);
+
+  // Approve STRK spending by privacy pool
+  console.log('  Approving STRK...');
+  const approveTxHash = await directInvoke({
+    privateKeyHex: TEST_PRIVATE_KEY,
+    starknetAddress: address,
+    calls: [{
+      contractAddress: STRK_TOKEN_ADDRESS,
+      entrypoint: 'approve',
+      calldata: [PRIVACY_POOL_ADDRESS, depositAmount.toString(), '0'],
+    }],
+  });
+  console.log('  Approve TX:', approveTxHash);
+  const approveStatus = await waitForTx(approveTxHash);
+  assert(approveStatus === 'accepted', 'Approve transaction rejected');
+
+  // Compile: OpenChannel + Deposit + Withdraw(same amount)
+  const depositClientActions = [
+    address, privacyKey,
+    '3',                                                   // 3 actions
+    '1', address, '0', randomFelt(), randomFelt(),         // OpenChannel(to_self, index=0, rand, rand)
+    '5', STRK_TOKEN_ADDRESS, depositAmount.toString(),     // Deposit(token, amount)
+    '7', address, STRK_TOKEN_ADDRESS, depositAmount.toString(), randomFelt(), // Withdraw(to_self, token, amount, rand)
+  ];
+  const depositServerActions = await provider.callContract({
+    contractAddress: PRIVACY_POOL_ADDRESS,
+    entrypoint: 'compile_actions',
+    calldata: depositClientActions,
+  });
+  console.log('  Compiled:', depositServerActions.length, 'server action felts');
+
+  // Prove and execute
+  const depositTxHash = await proveAndExecute({
+    privateKeyHex: TEST_PRIVATE_KEY,
+    starknetAddress: address,
+    clientActions: depositClientActions,
+    serverActions: [...depositServerActions],
+  });
+  console.log('  Deposit+Withdraw TX:', depositTxHash);
+  const depositStatus = await waitForTx(depositTxHash);
+  assert(depositStatus === 'accepted', 'Deposit+Withdraw transaction rejected');
+
+  const balanceAfter = await getStrkBalance(address);
+  console.log(`  Balance after: ${formatStrk(balanceAfter)}`);
+
+  console.log('\nDEPOSIT + WITHDRAW TEST PASSED!\n');
 }
 
 // ============================================================

@@ -39,8 +39,5 @@ jobs:
       - name: Setup — deploy account
         run: npx tsx test/e2e.ts setup
 
-      - name: Probe action formats
-        run: npx tsx test/probe-actions.ts
-
-      - name: Privacy pool — compile, prove, submit
+      - name: Deposit + Withdraw via privacy pool
         run: npx tsx test/e2e.ts deposit
