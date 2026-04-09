@@ -87,14 +87,22 @@ async function main() {
   await test('Variant 6: 2 fields', ['1', '6', STRK, amt]);
   await test('Variant 6: 3 fields', ['1', '6', ADDR, STRK, amt]);
 
-  // === Combinations that should provide replay protection ===
+  // === Combinations ===
   console.log('\n--- Combinations ---');
-  // Deposit + any WriteOnce action
-  const ok = await test('Deposit + OpenCh(4f)', ['2', '5', STRK, amt, '1', ADDR, '0', rand(), rand()]);
-  if (!ok) {
-    await test('OpenCh(4f) + Deposit', ['2', '1', ADDR, '0', rand(), rand(), '5', STRK, amt]);
-    await test('OpenCh(3f) + Deposit', ['2', '1', ADDR, '0', rand(), '5', STRK, amt]);
-  }
+  await test('OpenCh + Deposit', ['2', '1', ADDR, '0', rand(), rand(), '5', STRK, amt]);
+  await test('OpenCh + Deposit + Withdraw(same)', [
+    '3',
+    '1', ADDR, '0', rand(), rand(),              // OpenChannel
+    '5', STRK, amt,                               // Deposit
+    '7', ADDR, STRK, amt, rand(),                 // Withdraw same amount to self
+  ]);
+  await test('OpenCh + OpenSub(6f) + Deposit + Withdraw', [
+    '4',
+    '1', ADDR, '0', rand(), rand(),              // OpenChannel
+    '2', ADDR, userPubKey, rand(), '0', STRK, rand(), // OpenSubchannel(6f)
+    '5', STRK, amt,                               // Deposit
+    '7', ADDR, STRK, amt, rand(),                 // Withdraw
+  ]);
 }
 
 main().catch(e => { console.error('FATAL:', e.message?.slice(0, 200)); process.exit(1); });
