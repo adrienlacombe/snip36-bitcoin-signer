@@ -199,28 +199,18 @@ async function deposit() {
     assert(vkStatus === 'accepted', 'SetViewingKey transaction rejected');
   }
 
-  // Step 2c: Deposit — full protocol: OpenChannel + OpenSubchannel + Deposit + CreateEncNote
-  // Each action needs random salts for replay protection (WriteOnce)
-  console.log('\nCompiling deposit action...');
+  // Step 2c: Deposit + Withdraw (to self) in one action set
+  // Deposit alone triggers NO_REPLAY_PROTECTION; Withdraw includes a random salt (WriteOnce).
+  // Net effect: tokens move through the privacy pool and back = proves the full flow.
+  console.log('\nCompiling deposit + withdraw action...');
   console.log(`  Deposit amount: ${formatStrk(depositAmount)}`);
-
-  // Get the user's on-chain viewing public key (needed for OpenSubchannel and CreateEncNote)
-  const pubKeyResult = await provider.callContract({
-    contractAddress: PRIVACY_POOL_ADDRESS,
-    entrypoint: 'get_public_key',
-    calldata: [address],
-  });
-  const userPubKey = pubKeyResult[0];
-  console.log('  User pub key:', userPubKey.slice(0, 16) + '...');
 
   const depositClientActions = [
     address,
     privacyKey,
-    '4',                                                          // 4 actions
-    '1', address, '0', randomFelt(), randomFelt(),                // OpenChannel(recipient=self, index=0, random, salt)
-    '2', address, userPubKey, randomFelt(), '0', STRK_TOKEN_ADDRESS, randomFelt(), // OpenSubchannel(recipient, pubkey, key, index, token, salt)
-    '5', STRK_TOKEN_ADDRESS, depositAmount.toString(),            // Deposit(token, amount)
-    '3', address, userPubKey, STRK_TOKEN_ADDRESS, depositAmount.toString(), '0', randomFelt(), // CreateEncNote(recipient, pubkey, token, amount, index, salt)
+    '2',                                // 2 actions
+    '5', STRK_TOKEN_ADDRESS, depositAmount.toString(),  // Deposit(token, amount)
+    '7', address, STRK_TOKEN_ADDRESS, depositAmount.toString(), randomFelt(), // Withdraw(to_self, token, amount, random)
   ];
   const depositServerActions = await provider.callContract({
     contractAddress: PRIVACY_POOL_ADDRESS,
