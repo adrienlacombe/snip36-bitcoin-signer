@@ -270,16 +270,15 @@ export async function deployAccountDirect(params: {
   const l1DataPrice = BigInt(block.l1_data_gas_price?.price_in_fri ?? '0x20000');
   const l2Price = BigInt(block.l2_gas_price?.price_in_fri ?? '0x4000000000');
 
-  const result = await account.deployAccount({
+  // EthAccount validate uses secp256k1 which is gas-heavy; use fee estimation
+  const deployPayload = {
     classHash: ETH_ACCOUNT_CLASS_HASH,
     constructorCalldata: params.constructorCalldata,
     addressSalt: params.salt,
-  }, {
-    resourceBounds: {
-      l1_gas: { max_amount: 0x100n, max_price_per_unit: l1Price * 2n },
-      l2_gas: { max_amount: 0x1000000n, max_price_per_unit: l2Price * 2n },
-      l1_data_gas: { max_amount: 0x100n, max_price_per_unit: l1DataPrice * 2n },
-    },
+  };
+  const fee = await account.estimateDeployAccountFee(deployPayload);
+  const result = await account.deployAccount(deployPayload, {
+    resourceBounds: fee.resourceBounds,
   });
   return result.transaction_hash;
 }
