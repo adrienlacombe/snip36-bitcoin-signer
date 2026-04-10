@@ -4,10 +4,11 @@
  * Run:  VITE_AVNU_API_KEY=<key> npx tsx test/e2e.ts [step]
  *
  * Steps:
- *   setup    — compute address, deploy account (print address to fund)
- *   deposit  — deposit STRK into privacy pool
- *   withdraw — withdraw STRK from privacy pool
- *   all      — run setup + wait for funding + deposit + withdraw
+ *   setup    — deploy accounts A and B
+ *   deposit  — A: deposit + withdraw to self via privacy pool
+ *   transfer — A → B: private transfer via CreateEncNote
+ *   withdraw — A: standalone withdraw from privacy pool
+ *   all      — setup + deposit + transfer
  */
 import {
   extractPubKeyCoords,
@@ -22,6 +23,9 @@ import {
   proveAndExecute,
   formatStrk,
   getProvider,
+  deriveStarkPublicKey,
+  computeChannelKey,
+  generateRandom120,
   PRIVACY_POOL_ADDRESS,
   STRK_TOKEN_ADDRESS,
   AVNU_API_KEY,
@@ -29,9 +33,10 @@ import {
 } from './e2e-helpers';
 
 // ============================================================
-// Test private key (Hardhat #0 — DO NOT use with real funds)
+// Test private keys (Hardhat #0 and #1 — DO NOT use with real funds)
 // ============================================================
-const TEST_PRIVATE_KEY = 'ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
+const TEST_PRIVATE_KEY_A = 'ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
+const TEST_PRIVATE_KEY_B = '59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
 
 // ============================================================
 // Helpers
@@ -52,59 +57,51 @@ function sleep(ms: number) {
 // Step 1: Setup — Compute address and deploy
 // ============================================================
 
-async function setup() {
-  console.log('\n=== STEP 1: Setup ===\n');
-
-  // 1a. Extract public key coords
-  console.log('Extracting secp256k1 public key...');
-  const pubKey = extractPubKeyCoords(TEST_PRIVATE_KEY);
-  console.log('  x_low :', pubKey.xLow);
-  console.log('  x_high:', pubKey.xHigh);
-  console.log('  y_low :', pubKey.yLow);
-  console.log('  y_high:', pubKey.yHigh);
-
-  // 1b. Compute counterfactual address
-  console.log('\nComputing Starknet address...');
+async function deployAccount(name: string, privateKey: string) {
+  console.log(`\n--- ${name} ---`);
+  const pubKey = extractPubKeyCoords(privateKey);
   const { address, salt, constructorCalldata } = computeStarknetAddress(pubKey);
   console.log('  Address:', address);
-  console.log('  Salt:   ', salt);
-  console.log('  Calldata:', constructorCalldata);
 
-  // 1c. Check if already deployed
   const deployed = await isDeployed(address);
   if (deployed) {
-    console.log('\n  Account already deployed!');
+    console.log('  Already deployed');
   } else {
-    console.log('\nDeploying via AVNU paymaster (sponsored)...');
+    console.log('  Deploying via AVNU paymaster...');
     try {
       const txHash = await deployViaPaymaster({ address, salt, constructorCalldata });
       console.log('  Deploy TX:', txHash);
       const status = await waitForTx(txHash);
-      assert(status === 'accepted', 'Deploy transaction was rejected');
+      assert(status === 'accepted', `${name} deploy rejected`);
       console.log('  Deploy confirmed!');
     } catch (e: any) {
-      // If error contains "already deployed" or similar, that's OK
       if (e.message?.includes('deployed') || e.message?.includes('ALREADY')) {
-        console.log('  Account was already deployed (race condition OK)');
+        console.log('  Already deployed (race condition OK)');
       } else {
         throw e;
       }
     }
   }
 
-  // 1d. Check balance
   const balance = await getStrkBalance(address);
-  console.log(`\n  Balance: ${formatStrk(balance)}`);
+  console.log(`  Balance: ${formatStrk(balance)}`);
+  return { address, pubKey, salt, constructorCalldata, balance };
+}
 
-  if (balance === 0n) {
+async function setup() {
+  console.log('\n=== STEP 1: Setup ===\n');
+
+  const a = await deployAccount('Wallet A', TEST_PRIVATE_KEY_A);
+  const b = await deployAccount('Wallet B', TEST_PRIVATE_KEY_B);
+
+  if (a.balance === 0n) {
     console.log('\n╔══════════════════════════════════════════════════════╗');
-    console.log('║  FUND THIS ADDRESS WITH STRK:                       ║');
-    console.log(`║  ${address} ║`);
+    console.log('║  FUND WALLET A WITH STRK:                            ║');
+    console.log(`║  ${a.address} ║`);
     console.log('╚══════════════════════════════════════════════════════╝');
-    console.log('\nRun `npx tsx test/e2e.ts deposit` after funding.\n');
   }
 
-  return { address, pubKey, salt, constructorCalldata };
+  return { addressA: a.address, addressB: b.address };
 }
 
 // ============================================================
@@ -114,7 +111,7 @@ async function setup() {
 async function deposit() {
   console.log('\n=== STEP 2: Privacy Pool Integration ===\n');
 
-  const pubKey = extractPubKeyCoords(TEST_PRIVATE_KEY);
+  const pubKey = extractPubKeyCoords(TEST_PRIVATE_KEY_A);
   const { address } = computeStarknetAddress(pubKey);
   console.log('Account:', address);
 
@@ -124,7 +121,7 @@ async function deposit() {
   assert(balance > 0n, 'Account has no STRK balance — fund it first');
 
   // Derive privacy key
-  const privacyKey = derivePrivacyKey(TEST_PRIVATE_KEY, address);
+  const privacyKey = derivePrivacyKey(TEST_PRIVATE_KEY_A, address);
   console.log('Privacy key:', privacyKey);
 
   const provider = getProvider();
@@ -162,7 +159,7 @@ async function deposit() {
     });
     console.log('  Compiled, proving and executing...');
     const vkTx = await proveAndExecute({
-      privateKeyHex: TEST_PRIVATE_KEY,
+      privateKeyHex: TEST_PRIVATE_KEY_A,
       starknetAddress: address,
       clientActions: vkClientActions,
       serverActions: [...vkServerActions],
@@ -192,7 +189,7 @@ async function deposit() {
   // Approve STRK spending by privacy pool
   console.log('  Approving STRK...');
   const approveTxHash = await directInvoke({
-    privateKeyHex: TEST_PRIVATE_KEY,
+    privateKeyHex: TEST_PRIVATE_KEY_A,
     starknetAddress: address,
     calls: [{
       contractAddress: STRK_TOKEN_ADDRESS,
@@ -205,10 +202,12 @@ async function deposit() {
   assert(approveStatus === 'accepted', 'Approve transaction rejected');
 
   // Compile: OpenChannel + Deposit + Withdraw(same amount)
+  // Channel index must be unique per run (WriteOnce — reusing an index reverts with NON_ZERO_VALUE)
+  const channelIndex = '0x' + BigInt(Date.now()).toString(16);
   const depositClientActions = [
     address, privacyKey,
     '3',                                                   // 3 actions
-    '1', address, '0', randomFelt(), randomFelt(),         // OpenChannel(to_self, index=0, rand, rand)
+    '1', address, channelIndex, randomFelt(), randomFelt(), // OpenChannel(to_self, index, rand, rand)
     '5', STRK_TOKEN_ADDRESS, depositAmount.toString(),     // Deposit(token, amount)
     '7', address, STRK_TOKEN_ADDRESS, depositAmount.toString(), randomFelt(), // Withdraw(to_self, token, amount, rand)
   ];
@@ -221,7 +220,7 @@ async function deposit() {
 
   // Prove and execute
   const depositTxHash = await proveAndExecute({
-    privateKeyHex: TEST_PRIVATE_KEY,
+    privateKeyHex: TEST_PRIVATE_KEY_A,
     starknetAddress: address,
     clientActions: depositClientActions,
     serverActions: [...depositServerActions],
@@ -237,13 +236,163 @@ async function deposit() {
 }
 
 // ============================================================
-// Step 3: Withdraw STRK from privacy pool
+// Step 3: Private transfer A → B via CreateEncNote
+// ============================================================
+
+async function transfer() {
+  console.log('\n=== STEP 3: Private Transfer A → B ===\n');
+
+  const provider = getProvider();
+
+  // Derive addresses and keys for both wallets
+  const pubKeyA = extractPubKeyCoords(TEST_PRIVATE_KEY_A);
+  const { address: addrA } = computeStarknetAddress(pubKeyA);
+  const privacyKeyA = derivePrivacyKey(TEST_PRIVATE_KEY_A, addrA);
+
+  const pubKeyB = extractPubKeyCoords(TEST_PRIVATE_KEY_B);
+  const { address: addrB } = computeStarknetAddress(pubKeyB);
+  const privacyKeyB = derivePrivacyKey(TEST_PRIVATE_KEY_B, addrB);
+
+  console.log('Wallet A:', addrA);
+  console.log('Wallet B:', addrB);
+
+  // Ensure B has gas for viewing key registration
+  const balB = await getStrkBalance(addrB);
+  if (balB < 500000000000000n) { // < 0.0005 STRK
+    console.log('\nFunding Wallet B with gas from Wallet A...');
+    const fundAmount = 1000000000000000000n; // 1 STRK
+    const fundTx = await directInvoke({
+      privateKeyHex: TEST_PRIVATE_KEY_A,
+      starknetAddress: addrA,
+      calls: [{
+        contractAddress: STRK_TOKEN_ADDRESS,
+        entrypoint: 'transfer',
+        calldata: [addrB, fundAmount.toString(), '0'],
+      }],
+    });
+    console.log('  Fund TX:', fundTx);
+    const fundStatus = await waitForTx(fundTx);
+    assert(fundStatus === 'accepted', 'Fund transfer rejected');
+    console.log('  Wallet B funded:', formatStrk(await getStrkBalance(addrB)));
+  }
+
+  // Register B's viewing key if not already set
+  const randomFelt = () => {
+    const bytes = new Uint8Array(31);
+    crypto.getRandomValues(bytes);
+    return '0x' + Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+  };
+
+  let bNeedsViewingKey = true;
+  try {
+    const bPubResult = await provider.callContract({
+      contractAddress: PRIVACY_POOL_ADDRESS,
+      entrypoint: 'get_public_key',
+      calldata: [addrB],
+    });
+    if (bPubResult[0] !== '0x0' && bPubResult[0] !== '0') {
+      bNeedsViewingKey = false;
+      console.log('  Wallet B viewing key already set');
+    }
+  } catch { /* not set */ }
+
+  if (bNeedsViewingKey) {
+    console.log('\nRegistering Wallet B viewing key...');
+    const vkActions = [addrB, privacyKeyB, '1', '0', randomFelt()];
+    const vkServer = await provider.callContract({
+      contractAddress: PRIVACY_POOL_ADDRESS,
+      entrypoint: 'compile_actions',
+      calldata: vkActions,
+    });
+    const vkTx = await proveAndExecute({
+      privateKeyHex: TEST_PRIVATE_KEY_B,
+      starknetAddress: addrB,
+      clientActions: vkActions,
+      serverActions: [...vkServer],
+    });
+    console.log('  ViewingKey TX:', vkTx);
+    const vkStatus = await waitForTx(vkTx);
+    assert(vkStatus === 'accepted', 'Wallet B SetViewingKey rejected');
+  }
+
+  // Get B's on-chain public key (Stark curve, set during SetViewingKey)
+  const bPubKeyResult = await provider.callContract({
+    contractAddress: PRIVACY_POOL_ADDRESS,
+    entrypoint: 'get_public_key',
+    calldata: [addrB],
+  });
+  const bStarkPubKey = bPubKeyResult[0];
+  console.log('  B Stark public key:', bStarkPubKey.slice(0, 16) + '...');
+
+  // Compute channel key for A → B
+  const channelKey = computeChannelKey(addrA, privacyKeyA, addrB, bStarkPubKey);
+  console.log('  Channel key A→B:', channelKey.slice(0, 16) + '...');
+
+  // Approve STRK for the privacy pool
+  const transferAmount = 1000000000000000n; // 0.001 STRK
+  console.log(`\nPrivate transfer ${formatStrk(transferAmount)} from A to B...`);
+  console.log('  Approving STRK...');
+  const approveTx = await directInvoke({
+    privateKeyHex: TEST_PRIVATE_KEY_A,
+    starknetAddress: addrA,
+    calls: [{
+      contractAddress: STRK_TOKEN_ADDRESS,
+      entrypoint: 'approve',
+      calldata: [PRIVACY_POOL_ADDRESS, transferAmount.toString(), '0'],
+    }],
+  });
+  console.log('  Approve TX:', approveTx);
+  const approveStatus = await waitForTx(approveTx);
+  assert(approveStatus === 'accepted', 'Approve rejected');
+
+  // Build action batch: OpenChannel + OpenSubchannel + Deposit + CreateEncNote
+  // This deposits STRK and creates an encrypted note for B (nets to zero balance).
+  const channelIndex = '0x' + BigInt(Date.now()).toString(16);
+  const clientActions = [
+    addrA, privacyKeyA,
+    '4',                                                           // 4 actions
+    // OpenChannel (variant 1): recipient, index, random, salt
+    '1', addrB, channelIndex, randomFelt(), randomFelt(),
+    // OpenSubchannel (variant 2): recipient, recipient_pub_key, channel_key, index, token, salt
+    '2', addrB, bStarkPubKey, channelKey, '0', STRK_TOKEN_ADDRESS, randomFelt(),
+    // Deposit (variant 5): token, amount
+    '5', STRK_TOKEN_ADDRESS, transferAmount.toString(),
+    // CreateEncNote (variant 3): recipient, recipient_pub_key, token, amount, index, salt
+    '3', addrB, bStarkPubKey, STRK_TOKEN_ADDRESS, transferAmount.toString(), '0', generateRandom120(),
+  ];
+
+  console.log('  Compiling actions...');
+  const serverActions = await provider.callContract({
+    contractAddress: PRIVACY_POOL_ADDRESS,
+    entrypoint: 'compile_actions',
+    calldata: clientActions,
+  });
+  console.log('  Compiled:', serverActions.length, 'server action felts');
+
+  // Prove and execute
+  const txHash = await proveAndExecute({
+    privateKeyHex: TEST_PRIVATE_KEY_A,
+    starknetAddress: addrA,
+    clientActions,
+    serverActions: [...serverActions],
+  });
+  console.log('  Transfer TX:', txHash);
+  const txStatus = await waitForTx(txHash);
+  assert(txStatus === 'accepted', 'Private transfer rejected');
+
+  const balAfterA = await getStrkBalance(addrA);
+  console.log(`\n  A balance after: ${formatStrk(balAfterA)}`);
+  console.log('\nPRIVATE TRANSFER TEST PASSED!\n');
+}
+
+// ============================================================
+// Step 4: Withdraw STRK from privacy pool
 // ============================================================
 
 async function withdraw() {
   console.log('\n=== STEP 3: Withdraw ===\n');
 
-  const pubKey = extractPubKeyCoords(TEST_PRIVATE_KEY);
+  const pubKey = extractPubKeyCoords(TEST_PRIVATE_KEY_A);
   const { address } = computeStarknetAddress(pubKey);
   console.log('Account:', address);
 
@@ -251,7 +400,7 @@ async function withdraw() {
   console.log('Balance before:', formatStrk(balanceBefore));
 
   // Derive privacy key
-  const privacyKey = derivePrivacyKey(TEST_PRIVATE_KEY, address);
+  const privacyKey = derivePrivacyKey(TEST_PRIVATE_KEY_A, address);
 
   // Withdraw amount: 0.0005 STRK (half of what we deposited)
   const withdrawAmount = 500000000000000n; // 0.0005 * 10^18
@@ -287,7 +436,7 @@ async function withdraw() {
   // Prove and execute apply_actions (withdraw)
   console.log('\nProving and executing apply_actions (withdraw)...');
   const txHash = await proveAndExecute({
-    privateKeyHex: TEST_PRIVATE_KEY,
+    privateKeyHex: TEST_PRIVATE_KEY_A,
     starknetAddress: address,
     clientActions: withdrawClientActions,
     serverActions: [...withdrawServerActions],
@@ -330,16 +479,18 @@ async function main() {
       case 'deposit':
         await deposit();
         break;
+      case 'transfer':
+        await transfer();
+        break;
       case 'withdraw':
         await withdraw();
         break;
       case 'all': {
-        const { address } = await setup();
-        // Wait for funding
+        const { addressA } = await setup();
         console.log('\nWaiting for account to be funded...');
         let balance = 0n;
         for (let i = 0; i < 120; i++) {
-          balance = await getStrkBalance(address);
+          balance = await getStrkBalance(addressA);
           if (balance > 0n) break;
           if (i % 10 === 0) console.log(`  Still waiting... (${i}s)`);
           await sleep(1000);
@@ -348,12 +499,12 @@ async function main() {
         console.log(`  Funded: ${formatStrk(balance)}`);
 
         await deposit();
-        await withdraw();
+        await transfer();
         console.log('\n=== ALL TESTS PASSED ===\n');
         break;
       }
       default:
-        console.error(`Unknown step: ${step}. Use: setup, deposit, withdraw, all`);
+        console.error(`Unknown step: ${step}. Use: setup, deposit, transfer, withdraw, all`);
         process.exit(1);
     }
   } catch (e: any) {

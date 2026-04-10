@@ -5,7 +5,7 @@
 import { keccak256 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
-import { RpcProvider, hash, CallData, typedData as starknetTypedData, selector as selectorUtil, EthSigner, Account, transaction } from 'starknet';
+import { RpcProvider, hash, CallData, typedData as starknetTypedData, selector as selectorUtil, EthSigner, Account, transaction, ec } from 'starknet';
 
 // ============================================================
 // Config
@@ -572,6 +572,58 @@ export function derivePrivacyKey(privateKeyHex: string, starknetAddress: string)
   const raw = BigInt(seed);
   const key = (raw % (MAX_PRIVATE_KEY - 1n)) + 1n;
   return '0x' + key.toString(16);
+}
+
+// ============================================================
+// Privacy Pool Crypto Helpers
+// ============================================================
+
+/** Derive Stark curve public key (x-coordinate) from a privacy/viewing key. */
+export function deriveStarkPublicKey(privacyKey: string): string {
+  const keyHex = privacyKey.startsWith('0x') ? privacyKey.slice(2) : privacyKey;
+  const keyBytes = hexToBytes(keyHex.padStart(64, '0'));
+  const pubKeyBytes = ec.starkCurve.getPublicKey(keyBytes);
+  // Compressed key: skip prefix byte, take 32-byte x-coordinate
+  const xBytes = pubKeyBytes.slice(1, 33);
+  return '0x' + bytesToHex(xBytes);
+}
+
+/** Encode a short ASCII string as a felt (Cairo short string). */
+function shortStringToFelt(str: string): bigint {
+  let result = 0n;
+  for (let i = 0; i < str.length; i++) {
+    result = (result << 8n) | BigInt(str.charCodeAt(i));
+  }
+  return result;
+}
+
+/** Compute channel key: poseidon_hash_span([tag, sender, sender_key, recipient, recipient_pubkey]). */
+export function computeChannelKey(
+  senderAddr: string,
+  senderPrivKey: string,
+  recipientAddr: string,
+  recipientPubKey: string,
+): string {
+  const result = ec.starkCurve.poseidonHashMany([
+    shortStringToFelt('CHANNEL_KEY_TAG:V1'),
+    BigInt(senderAddr),
+    BigInt(senderPrivKey),
+    BigInt(recipientAddr),
+    BigInt(recipientPubKey),
+  ]);
+  return '0x' + result.toString(16);
+}
+
+/** Generate a 120-bit random value for CreateEncNote salt (must be > 1 and < 2^120). */
+export function generateRandom120(): string {
+  const bytes = new Uint8Array(15); // 15 bytes = 120 bits
+  crypto.getRandomValues(bytes);
+  let result = 0n;
+  for (const byte of bytes) {
+    result = (result << 8n) | BigInt(byte);
+  }
+  if (result <= 1n) result = 2n;
+  return '0x' + result.toString(16);
 }
 
 // ============================================================

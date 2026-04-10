@@ -36,8 +36,11 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Setup — deploy account
+      - name: Setup — deploy accounts A + B
         run: npx tsx test/e2e.ts setup
 
       - name: Deposit + Withdraw via privacy pool
         run: npx tsx test/e2e.ts deposit
+
+      - name: Private transfer A → B
+        run: npx tsx test/e2e.ts transfer
