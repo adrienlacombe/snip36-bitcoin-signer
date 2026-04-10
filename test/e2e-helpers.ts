@@ -276,9 +276,9 @@ export async function deployAccountDirect(params: {
     addressSalt: params.salt,
   }, {
     resourceBounds: {
-      l1_gas: { max_amount: 0x400n, max_price_per_unit: l1Price * 2n },
-      l2_gas: { max_amount: 0xE000000n, max_price_per_unit: l2Price * 2n },
-      l1_data_gas: { max_amount: 0x400n, max_price_per_unit: l1DataPrice * 2n },
+      l1_gas: { max_amount: 0x100n, max_price_per_unit: l1Price * 2n },
+      l2_gas: { max_amount: 0x1000000n, max_price_per_unit: l2Price * 2n },
+      l1_data_gas: { max_amount: 0x100n, max_price_per_unit: l1DataPrice * 2n },
     },
   });
   return result.transaction_hash;
