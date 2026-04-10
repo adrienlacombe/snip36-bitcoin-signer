@@ -27,6 +27,7 @@ import {
   deriveStarkPublicKey,
   computeChannelKey,
   generateRandom120,
+  getNextChannelIndex,
   PRIVACY_POOL_ADDRESS,
   STRK_TOKEN_ADDRESS,
   AVNU_API_KEY,
@@ -238,12 +239,13 @@ async function deposit() {
   assert(approveStatus === 'accepted', 'Approve transaction rejected');
 
   // Compile: OpenChannel + Deposit + Withdraw(same amount)
-  // Channel index must be unique per run (WriteOnce — reusing an index reverts with NON_ZERO_VALUE)
-  const channelIndex = '0x' + BigInt(Math.floor(Date.now() / 1000)).toString(16); // seconds, fits u32
+  // Channel index must be sequential (contract enforces INDEX_NOT_SEQUENTIAL)
+  const channelIndex = await getNextChannelIndex(address, privacyKey);
+  console.log('  Next channel index:', channelIndex);
   const depositClientActions = [
     address, privacyKey,
     '3',                                                   // 3 actions
-    '1', address, channelIndex, randomFelt(), randomFelt(), // OpenChannel(to_self, index, rand, rand)
+    '1', address, channelIndex.toString(), randomFelt(), randomFelt(), // OpenChannel(to_self, index, rand, rand)
     '5', STRK_TOKEN_ADDRESS, depositAmount.toString(),     // Deposit(token, amount)
     '7', address, STRK_TOKEN_ADDRESS, depositAmount.toString(), randomFelt(), // Withdraw(to_self, token, amount, rand)
   ];
@@ -383,12 +385,13 @@ async function transfer() {
 
   // Build action batch: OpenChannel + OpenSubchannel + Deposit + CreateEncNote
   // This deposits STRK and creates an encrypted note for B (nets to zero balance).
-  const channelIndex = '0x' + BigInt(Math.floor(Date.now() / 1000)).toString(16); // seconds, fits u32
+  const channelIndex = await getNextChannelIndex(addrA, privacyKeyA);
+  console.log('  Next channel index:', channelIndex);
   const clientActions = [
     addrA, privacyKeyA,
     '4',                                                           // 4 actions
     // OpenChannel (variant 1): recipient, index, random, salt
-    '1', addrB, channelIndex, randomFelt(), randomFelt(),
+    '1', addrB, channelIndex.toString(), randomFelt(), randomFelt(),
     // OpenSubchannel (variant 2): recipient, recipient_pub_key, channel_key, index, token, salt
     '2', addrB, bStarkPubKey, channelKey, '0', STRK_TOKEN_ADDRESS, randomFelt(),
     // Deposit (variant 5): token, amount

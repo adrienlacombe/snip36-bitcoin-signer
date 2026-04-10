@@ -656,6 +656,38 @@ export function computeChannelKey(
   return '0x' + result.toString(16);
 }
 
+/** Compute outgoing_channel_id for scanning channel count. */
+function computeOutgoingChannelId(senderAddr: string, senderPrivKey: string, index: number): string {
+  const result = ec.starkCurve.poseidonHashMany([
+    shortStringToFelt('OUTGOING_CHANNEL_ID_TAG:V1'),
+    BigInt(senderAddr),
+    BigInt(senderPrivKey),
+    BigInt(index),
+    0n,
+  ]);
+  return '0x' + result.toString(16);
+}
+
+/** Find the next available sequential channel index by scanning outgoing channels. */
+export async function getNextChannelIndex(address: string, privacyKey: string): Promise<number> {
+  const provider = getProvider();
+  for (let i = 0; i < 1000; i++) {
+    const id = computeOutgoingChannelId(address, privacyKey, i);
+    try {
+      const info = await provider.callContract({
+        contractAddress: PRIVACY_POOL_ADDRESS,
+        entrypoint: 'get_outgoing_channel_info',
+        calldata: [id],
+      });
+      // salt == 0 means empty slot
+      if (info[0] === '0x0' || info[0] === '0') return i;
+    } catch {
+      return i;
+    }
+  }
+  throw new Error('No available channel index found');
+}
+
 /** Generate a 120-bit random value for CreateEncNote salt (must be > 1 and < 2^120). */
 export function generateRandom120(): string {
   const bytes = new Uint8Array(15); // 15 bytes = 120 bits
