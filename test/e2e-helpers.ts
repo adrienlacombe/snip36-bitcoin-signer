@@ -607,7 +607,10 @@ export async function proveAndExecute(params: {
 // ============================================================
 
 export function derivePrivacyKey(privateKeyHex: string, starknetAddress: string): string {
-  // Deterministic: keccak256 of private key + starknet address
+  // Deterministic: keccak256 of private key + starknet address.
+  // NOTE: keccak is used here only because the viewing keys for the test accounts
+  // were already registered on Sepolia with this derivation. SetViewingKey is WriteOnce,
+  // so the derivation cannot be changed without new accounts.
   const seed = keccak256(
     ('0x' + privateKeyHex.replace('0x', '') + starknetAddress.replace('0x', '')) as `0x${string}`,
   );
