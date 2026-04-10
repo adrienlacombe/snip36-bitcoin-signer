@@ -218,59 +218,135 @@ async function deposit() {
   assert(pubKeyCheck[0] !== '0x0' && pubKeyCheck[0] !== '0', 'Viewing key not set after registration');
   console.log('  On-chain viewing key:', pubKeyCheck[0].slice(0, 16) + '...');
 
-  // Step 2c: Deposit + Withdraw through the privacy pool
-  // OpenChannel provides WriteOnce replay protection, Deposit+Withdraw net to zero balance.
+  // Step 2c: Deposit through the privacy pool
   const depositAmount = 1000000000000000n; // 0.001 STRK
-  console.log(`\nDeposit + Withdraw ${formatStrk(depositAmount)} through privacy pool...`);
+  const starkPubKey = pubKeyCheck[0]; // on-chain Stark public key
 
-  // Approve STRK spending by privacy pool
-  console.log('  Approving STRK...');
-  const approveTxHash = await directInvoke({
-    privateKeyHex: TEST_PRIVATE_KEY_A,
-    starknetAddress: address,
-    calls: [{
-      contractAddress: STRK_TOKEN_ADDRESS,
-      entrypoint: 'approve',
-      calldata: [PRIVACY_POOL_ADDRESS, depositAmount.toString(), '0'],
-    }],
-  });
-  console.log('  Approve TX:', approveTxHash);
-  const approveStatus = await waitForTx(approveTxHash);
-  assert(approveStatus === 'accepted', 'Approve transaction rejected');
-
-  // Compile: OpenChannel + Deposit + Withdraw(same amount)
-  // Channel index must be sequential (contract enforces INDEX_NOT_SEQUENTIAL)
+  // Check if self-channel already exists (OpenChannel is WriteOnce per recipient)
   const channelIndex = await getNextChannelIndex(address, privacyKey);
-  console.log('  Next channel index:', channelIndex);
-  const depositClientActions = [
-    address, privacyKey,
-    '3',                                                   // 3 actions
-    '1', address, channelIndex.toString(), randomFelt(), randomFelt(), // OpenChannel(to_self, index, rand, rand)
-    '5', STRK_TOKEN_ADDRESS, depositAmount.toString(),     // Deposit(token, amount)
-    '7', address, STRK_TOKEN_ADDRESS, depositAmount.toString(), randomFelt(), // Withdraw(to_self, token, amount, rand)
-  ];
-  const depositServerActions = await provider.callContract({
-    contractAddress: PRIVACY_POOL_ADDRESS,
-    entrypoint: 'compile_actions',
-    calldata: depositClientActions,
-  });
-  console.log('  Compiled:', depositServerActions.length, 'server action felts');
+  const selfChannelExists = channelIndex > 0; // index 0 was used for self-channel
 
-  // Prove and execute
-  const depositTxHash = await proveAndExecute({
-    privateKeyHex: TEST_PRIVATE_KEY_A,
-    starknetAddress: address,
-    clientActions: depositClientActions,
-    serverActions: [...depositServerActions],
-  });
-  console.log('  Deposit+Withdraw TX:', depositTxHash);
-  const depositStatus = await waitForTx(depositTxHash);
-  assert(depositStatus === 'accepted', 'Deposit+Withdraw transaction rejected');
+  if (selfChannelExists) {
+    // Self-channel exists — use Deposit + CreateEncNote(to_self) for replay protection.
+    // CreateEncNote writes to WriteOnce note storage, providing replay protection.
+    // Balance: Deposit(+X) + CreateEncNote(-X) = 0
+    console.log(`\nDeposit + CreateEncNote(to_self) ${formatStrk(depositAmount)}...`);
+
+    // Compute self-channel key for CreateEncNote
+    const channelKey = computeChannelKey(address, privacyKey, address, starkPubKey);
+
+    // Approve STRK
+    console.log('  Approving STRK...');
+    const approveTxHash = await directInvoke({
+      privateKeyHex: TEST_PRIVATE_KEY_A,
+      starknetAddress: address,
+      calls: [{
+        contractAddress: STRK_TOKEN_ADDRESS,
+        entrypoint: 'approve',
+        calldata: [PRIVACY_POOL_ADDRESS, depositAmount.toString(), '0'],
+      }],
+    });
+    console.log('  Approve TX:', approveTxHash);
+    const approveStatus = await waitForTx(approveTxHash);
+    assert(approveStatus === 'accepted', 'Approve rejected');
+
+    // Check if STRK subchannel exists; if not, include OpenSubchannel
+    // For now, try with OpenSubchannel first (idempotent on subsequent runs via different note index)
+    const depositClientActions = [
+      address, privacyKey,
+      '3',                                                       // 3 actions
+      // OpenSubchannel (variant 2): for STRK token to self
+      '2', address, starkPubKey, channelKey, '0', STRK_TOKEN_ADDRESS, randomFelt(),
+      // Deposit (variant 5): token, amount
+      '5', STRK_TOKEN_ADDRESS, depositAmount.toString(),
+      // CreateEncNote (variant 3): to self — replay protection + balance zero
+      '3', address, starkPubKey, STRK_TOKEN_ADDRESS, depositAmount.toString(), '0', generateRandom120(),
+    ];
+
+    var depositServerActions: string[];
+    try {
+      depositServerActions = [...await provider.callContract({
+        contractAddress: PRIVACY_POOL_ADDRESS,
+        entrypoint: 'compile_actions',
+        calldata: depositClientActions,
+      })];
+    } catch {
+      // OpenSubchannel might fail if it already exists — try without it
+      console.log('  Subchannel exists, retrying without OpenSubchannel...');
+      const retryActions = [
+        address, privacyKey,
+        '2',                                                       // 2 actions
+        '5', STRK_TOKEN_ADDRESS, depositAmount.toString(),
+        '3', address, starkPubKey, STRK_TOKEN_ADDRESS, depositAmount.toString(), '0', generateRandom120(),
+      ];
+      depositServerActions = [...await provider.callContract({
+        contractAddress: PRIVACY_POOL_ADDRESS,
+        entrypoint: 'compile_actions',
+        calldata: retryActions,
+      })];
+      // Use the retry actions for proving
+      depositClientActions.length = 0;
+      depositClientActions.push(...retryActions);
+    }
+
+    console.log('  Compiled:', depositServerActions.length, 'server action felts');
+
+    const depositTxHash = await proveAndExecute({
+      privateKeyHex: TEST_PRIVATE_KEY_A,
+      starknetAddress: address,
+      clientActions: depositClientActions,
+      serverActions: depositServerActions,
+    });
+    console.log('  Deposit TX:', depositTxHash);
+    const depositStatus = await waitForTx(depositTxHash);
+    assert(depositStatus === 'accepted', 'Deposit transaction rejected');
+  } else {
+    // First run — open self-channel + deposit + withdraw
+    console.log(`\nDeposit + Withdraw ${formatStrk(depositAmount)} (first run)...`);
+
+    console.log('  Approving STRK...');
+    const approveTxHash = await directInvoke({
+      privateKeyHex: TEST_PRIVATE_KEY_A,
+      starknetAddress: address,
+      calls: [{
+        contractAddress: STRK_TOKEN_ADDRESS,
+        entrypoint: 'approve',
+        calldata: [PRIVACY_POOL_ADDRESS, depositAmount.toString(), '0'],
+      }],
+    });
+    console.log('  Approve TX:', approveTxHash);
+    const approveStatus = await waitForTx(approveTxHash);
+    assert(approveStatus === 'accepted', 'Approve rejected');
+
+    var depositClientActions = [
+      address, privacyKey,
+      '3',                                                   // 3 actions
+      '1', address, '0', randomFelt(), randomFelt(),         // OpenChannel(to_self, index=0, rand, rand)
+      '5', STRK_TOKEN_ADDRESS, depositAmount.toString(),     // Deposit(token, amount)
+      '7', address, STRK_TOKEN_ADDRESS, depositAmount.toString(), randomFelt(), // Withdraw(to_self, token, amount, rand)
+    ];
+    var depositServerActions = [...await provider.callContract({
+      contractAddress: PRIVACY_POOL_ADDRESS,
+      entrypoint: 'compile_actions',
+      calldata: depositClientActions,
+    })];
+    console.log('  Compiled:', depositServerActions.length, 'server action felts');
+
+    const depositTxHash = await proveAndExecute({
+      privateKeyHex: TEST_PRIVATE_KEY_A,
+      starknetAddress: address,
+      clientActions: depositClientActions,
+      serverActions: depositServerActions,
+    });
+    console.log('  Deposit+Withdraw TX:', depositTxHash);
+    const depositStatus = await waitForTx(depositTxHash);
+    assert(depositStatus === 'accepted', 'Deposit+Withdraw rejected');
+  }
 
   const balanceAfter = await getStrkBalance(address);
   console.log(`  Balance after: ${formatStrk(balanceAfter)}`);
 
-  console.log('\nDEPOSIT + WITHDRAW TEST PASSED!\n');
+  console.log('\nDEPOSIT TEST PASSED!\n');
 }
 
 // ============================================================
