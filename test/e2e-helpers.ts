@@ -276,7 +276,7 @@ export async function deployAccountDirect(params: {
     constructorCalldata: params.constructorCalldata,
     addressSalt: params.salt,
   };
-  const fee = await account.estimateDeployAccountFee(deployPayload);
+  const fee = await account.estimateAccountDeployFee(deployPayload);
   const result = await account.deployAccount(deployPayload, {
     resourceBounds: fee.resourceBounds,
   });
