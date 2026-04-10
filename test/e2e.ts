@@ -14,6 +14,7 @@ import {
   extractPubKeyCoords,
   computeStarknetAddress,
   deployViaPaymaster,
+  deployAccountDirect,
   isDeployed,
   getStrkBalance,
   waitForTx,
@@ -57,7 +58,7 @@ function sleep(ms: number) {
 // Step 1: Setup — Compute address and deploy
 // ============================================================
 
-async function deployAccount(name: string, privateKey: string) {
+async function deployAccount(name: string, privateKey: string, sponsor?: { privateKey: string; address: string }) {
   console.log(`\n--- ${name} ---`);
   const pubKey = extractPubKeyCoords(privateKey);
   const { address, salt, constructorCalldata } = computeStarknetAddress(pubKey);
@@ -67,20 +68,52 @@ async function deployAccount(name: string, privateKey: string) {
   if (deployed) {
     console.log('  Already deployed');
   } else {
-    console.log('  Deploying via AVNU paymaster...');
+    // Try paymaster first; fall back to direct deploy funded by sponsor
+    let success = false;
     try {
+      console.log('  Deploying via AVNU paymaster...');
       const txHash = await deployViaPaymaster({ address, salt, constructorCalldata });
       console.log('  Deploy TX:', txHash);
       const status = await waitForTx(txHash);
       assert(status === 'accepted', `${name} deploy rejected`);
       console.log('  Deploy confirmed!');
+      success = true;
     } catch (e: any) {
       if (e.message?.includes('deployed') || e.message?.includes('ALREADY')) {
         console.log('  Already deployed (race condition OK)');
+        success = true;
+      } else if (sponsor) {
+        console.log('  Paymaster unavailable, deploying via sponsor...');
+        // Fund the counterfactual address with gas from sponsor
+        const fundAmount = 1000000000000000000n; // 1 STRK
+        const fundTx = await directInvoke({
+          privateKeyHex: sponsor.privateKey,
+          starknetAddress: sponsor.address,
+          calls: [{
+            contractAddress: STRK_TOKEN_ADDRESS,
+            entrypoint: 'transfer',
+            calldata: [address, fundAmount.toString(), '0'],
+          }],
+        });
+        console.log('  Fund TX:', fundTx);
+        await waitForTx(fundTx);
+        // Deploy using the account's own gas
+        const deployTx = await deployAccountDirect({
+          privateKeyHex: privateKey,
+          address,
+          salt,
+          constructorCalldata,
+        });
+        console.log('  Deploy TX:', deployTx);
+        const deployStatus = await waitForTx(deployTx);
+        assert(deployStatus === 'accepted', `${name} deploy rejected`);
+        console.log('  Deploy confirmed (sponsor-funded)!');
+        success = true;
       } else {
         throw e;
       }
     }
+    assert(success, `${name} deploy failed`);
   }
 
   const balance = await getStrkBalance(address);
@@ -92,7 +125,10 @@ async function setup() {
   console.log('\n=== STEP 1: Setup ===\n');
 
   const a = await deployAccount('Wallet A', TEST_PRIVATE_KEY_A);
-  const b = await deployAccount('Wallet B', TEST_PRIVATE_KEY_B);
+  const b = await deployAccount('Wallet B', TEST_PRIVATE_KEY_B, {
+    privateKey: TEST_PRIVATE_KEY_A,
+    address: a.address,
+  });
 
   if (a.balance === 0n) {
     console.log('\n╔══════════════════════════════════════════════════════╗');

@@ -245,6 +245,46 @@ export async function executeInvokeTx(params: {
 }
 
 // ============================================================
+// Direct Deploy Account (no paymaster — account pays its own gas)
+// ============================================================
+
+/**
+ * Deploy a new account via DEPLOY_ACCOUNT transaction.
+ * The target address must already hold STRK for gas.
+ */
+export async function deployAccountDirect(params: {
+  privateKeyHex: string;
+  address: string;
+  salt: string;
+  constructorCalldata: string[];
+}): Promise<string> {
+  const provider = getProvider();
+  const prefixedKey = params.privateKeyHex.startsWith('0x')
+    ? params.privateKeyHex
+    : '0x' + params.privateKeyHex;
+  const signer = new EthSigner(prefixedKey);
+  const account = new Account({ provider, address: params.address, signer });
+
+  const block = await provider.getBlockWithReceipts('latest') as any;
+  const l1Price = BigInt(block.l1_gas_price?.price_in_fri ?? '0x400000000000');
+  const l1DataPrice = BigInt(block.l1_data_gas_price?.price_in_fri ?? '0x20000');
+  const l2Price = BigInt(block.l2_gas_price?.price_in_fri ?? '0x4000000000');
+
+  const result = await account.deployAccount({
+    classHash: ETH_ACCOUNT_CLASS_HASH,
+    constructorCalldata: params.constructorCalldata,
+    addressSalt: params.salt,
+  }, {
+    resourceBounds: {
+      l1_gas: { max_amount: 0x400n, max_price_per_unit: l1Price * 2n },
+      l2_gas: { max_amount: 0xE000000n, max_price_per_unit: l2Price * 2n },
+      l1_data_gas: { max_amount: 0x400n, max_price_per_unit: l1DataPrice * 2n },
+    },
+  });
+  return result.transaction_hash;
+}
+
+// ============================================================
 // Raw secp256k1 Signing (for Starknet typed data)
 // ============================================================
 
