@@ -84,8 +84,8 @@ async function deployAccount(name: string, privateKey: string, sponsor?: { priva
         success = true;
       } else if (sponsor) {
         console.log('  Paymaster unavailable, deploying via sponsor...');
-        // Fund the counterfactual address with gas from sponsor
-        const fundAmount = 1000000000000000000n; // 1 STRK
+        // Fund enough for EthAccount deploy (secp256k1 verify is gas-heavy)
+        const fundAmount = 5000000000000000000n; // 5 STRK
         const fundTx = await directInvoke({
           privateKeyHex: sponsor.privateKey,
           starknetAddress: sponsor.address,

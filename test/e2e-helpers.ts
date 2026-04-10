@@ -270,19 +270,17 @@ export async function deployAccountDirect(params: {
   const l1DataPrice = BigInt(block.l1_data_gas_price?.price_in_fri ?? '0x20000');
   const l2Price = BigInt(block.l2_gas_price?.price_in_fri ?? '0x4000000000');
 
-  // EthAccount validate uses secp256k1 which is gas-heavy; estimate + 3x headroom
-  const deployPayload = {
+  // EthAccount validate uses secp256k1 which needs a lot of l2_gas.
+  // Use the same generous bounds as directInvoke.
+  const result = await account.deployAccount({
     classHash: ETH_ACCOUNT_CLASS_HASH,
     constructorCalldata: params.constructorCalldata,
     addressSalt: params.salt,
-  };
-  const fee = await account.estimateAccountDeployFee(deployPayload);
-  const rb = fee.resourceBounds;
-  const result = await account.deployAccount(deployPayload, {
+  }, {
     resourceBounds: {
-      l1_gas: { max_amount: BigInt(rb.l1_gas.max_amount) * 3n, max_price_per_unit: BigInt(rb.l1_gas.max_price_per_unit) * 2n },
-      l2_gas: { max_amount: BigInt(rb.l2_gas.max_amount) * 3n, max_price_per_unit: BigInt(rb.l2_gas.max_price_per_unit) * 2n },
-      l1_data_gas: { max_amount: BigInt(rb.l1_data_gas.max_amount) * 3n, max_price_per_unit: BigInt(rb.l1_data_gas.max_price_per_unit) * 2n },
+      l1_gas: { max_amount: 0x400n, max_price_per_unit: l1Price * 2n },
+      l2_gas: { max_amount: 0xE000000n, max_price_per_unit: l2Price * 2n },
+      l1_data_gas: { max_amount: 0x400n, max_price_per_unit: l1DataPrice * 2n },
     },
   });
   return result.transaction_hash;
