@@ -239,7 +239,7 @@ async function deposit() {
 
   // Compile: OpenChannel + Deposit + Withdraw(same amount)
   // Channel index must be unique per run (WriteOnce — reusing an index reverts with NON_ZERO_VALUE)
-  const channelIndex = '0x' + BigInt(Date.now()).toString(16);
+  const channelIndex = '0x' + BigInt(Math.floor(Date.now() / 1000)).toString(16); // seconds, fits u32
   const depositClientActions = [
     address, privacyKey,
     '3',                                                   // 3 actions
@@ -383,7 +383,7 @@ async function transfer() {
 
   // Build action batch: OpenChannel + OpenSubchannel + Deposit + CreateEncNote
   // This deposits STRK and creates an encrypted note for B (nets to zero balance).
-  const channelIndex = '0x' + BigInt(Date.now()).toString(16);
+  const channelIndex = '0x' + BigInt(Math.floor(Date.now() / 1000)).toString(16); // seconds, fits u32
   const clientActions = [
     addrA, privacyKeyA,
     '4',                                                           // 4 actions
