@@ -688,6 +688,38 @@ export async function getNextChannelIndex(address: string, privacyKey: string): 
   throw new Error('No available channel index found');
 }
 
+/** Compute note_id for scanning note count. */
+function computeNoteId(channelKey: string, token: string, index: number): string {
+  const result = ec.starkCurve.poseidonHashMany([
+    shortStringToFelt('NOTE_ID_TAG:V1'),
+    BigInt(channelKey),
+    BigInt(token),
+    BigInt(index),
+    0n,
+  ]);
+  return '0x' + result.toString(16);
+}
+
+/** Find the next available note index for a (channel, token) pair. */
+export async function getNextNoteIndex(channelKey: string, token: string): Promise<number> {
+  const provider = getProvider();
+  for (let i = 0; i < 1000; i++) {
+    const noteId = computeNoteId(channelKey, token, i);
+    try {
+      const note = await provider.callContract({
+        contractAddress: PRIVACY_POOL_ADDRESS,
+        entrypoint: 'get_note',
+        calldata: [noteId],
+      });
+      // Note with r=0 means empty
+      if (note[0] === '0x0' || note[0] === '0') return i;
+    } catch {
+      return i;
+    }
+  }
+  throw new Error('No available note index found');
+}
+
 /** Generate a 120-bit random value for CreateEncNote salt (must be > 1 and < 2^120). */
 export function generateRandom120(): string {
   const bytes = new Uint8Array(15); // 15 bytes = 120 bits

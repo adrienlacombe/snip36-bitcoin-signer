@@ -28,6 +28,7 @@ import {
   computeChannelKey,
   generateRandom120,
   getNextChannelIndex,
+  getNextNoteIndex,
   PRIVACY_POOL_ADDRESS,
   STRK_TOKEN_ADDRESS,
   AVNU_API_KEY,
@@ -250,43 +251,39 @@ async function deposit() {
     const approveStatus = await waitForTx(approveTxHash);
     assert(approveStatus === 'accepted', 'Approve rejected');
 
-    // Check if STRK subchannel exists; if not, include OpenSubchannel
-    // For now, try with OpenSubchannel first (idempotent on subsequent runs via different note index)
-    const depositClientActions = [
-      address, privacyKey,
-      '3',                                                       // 3 actions
-      // OpenSubchannel (variant 2): for STRK token to self
-      '2', address, starkPubKey, channelKey, '0', STRK_TOKEN_ADDRESS, randomFelt(),
-      // Deposit (variant 5): token, amount
-      '5', STRK_TOKEN_ADDRESS, depositAmount.toString(),
-      // CreateEncNote (variant 3): to self — replay protection + balance zero
-      '3', address, starkPubKey, STRK_TOKEN_ADDRESS, depositAmount.toString(), '0', generateRandom120(),
-    ];
+    // Find next available note index for the (self-channel, STRK) pair
+    const noteIndex = await getNextNoteIndex(channelKey, STRK_TOKEN_ADDRESS);
+    console.log('  Next note index:', noteIndex);
 
+    // Try with OpenSubchannel first; if subchannel exists, retry without it
+    let depositClientActions: string[];
     var depositServerActions: string[];
     try {
+      depositClientActions = [
+        address, privacyKey,
+        '3',                                                       // 3 actions
+        '2', address, starkPubKey, channelKey, '0', STRK_TOKEN_ADDRESS, randomFelt(),
+        '5', STRK_TOKEN_ADDRESS, depositAmount.toString(),
+        '3', address, starkPubKey, STRK_TOKEN_ADDRESS, depositAmount.toString(), noteIndex.toString(), generateRandom120(),
+      ];
       depositServerActions = [...await provider.callContract({
         contractAddress: PRIVACY_POOL_ADDRESS,
         entrypoint: 'compile_actions',
         calldata: depositClientActions,
       })];
     } catch {
-      // OpenSubchannel might fail if it already exists — try without it
       console.log('  Subchannel exists, retrying without OpenSubchannel...');
-      const retryActions = [
+      depositClientActions = [
         address, privacyKey,
         '2',                                                       // 2 actions
         '5', STRK_TOKEN_ADDRESS, depositAmount.toString(),
-        '3', address, starkPubKey, STRK_TOKEN_ADDRESS, depositAmount.toString(), '0', generateRandom120(),
+        '3', address, starkPubKey, STRK_TOKEN_ADDRESS, depositAmount.toString(), noteIndex.toString(), generateRandom120(),
       ];
       depositServerActions = [...await provider.callContract({
         contractAddress: PRIVACY_POOL_ADDRESS,
         entrypoint: 'compile_actions',
-        calldata: retryActions,
+        calldata: depositClientActions,
       })];
-      // Use the retry actions for proving
-      depositClientActions.length = 0;
-      depositClientActions.push(...retryActions);
     }
 
     console.log('  Compiled:', depositServerActions.length, 'server action felts');
