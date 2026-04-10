@@ -459,6 +459,17 @@ async function transfer() {
   const approveStatus = await waitForTx(approveTx);
   assert(approveStatus === 'accepted', 'Approve rejected');
 
+  // Wait for the proving service's historical block to catch up with B's state changes.
+  // The prover uses latestBlock - 20; we need all state (B's viewing key, approve) finalized.
+  console.log('  Waiting for block finality (prover needs latestBlock - 20)...');
+  const targetBlock = await provider.getBlockNumber();
+  for (let i = 0; i < 60; i++) {
+    const current = await provider.getBlockNumber();
+    if (current >= targetBlock + 25) break;
+    if (i % 5 === 0) console.log(`    Block ${current}, need ${targetBlock + 25}...`);
+    await sleep(3000);
+  }
+
   // Build action batch: OpenChannel + OpenSubchannel + Deposit + CreateEncNote
   // This deposits STRK and creates an encrypted note for B (nets to zero balance).
   const channelIndex = await getNextChannelIndex(addrA, privacyKeyA);
