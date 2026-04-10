@@ -1,6 +1,6 @@
 # E2E Integration Tests
 
-End-to-end tests for SNIP-36 EVM accounts interacting with the Starknet privacy pool on Sepolia. Tests run daily in CI and can be triggered manually.
+End-to-end tests for SNIP-36 secp256k1 accounts interacting with the Starknet privacy pool on Sepolia. Tests run daily in CI and can be triggered manually.
 
 ## Wallets
 

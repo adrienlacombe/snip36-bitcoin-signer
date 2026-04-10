@@ -1,5 +1,5 @@
 /**
- * E2E Integration Tests for SNIP-36 EVM Privacy Pool
+ * E2E Integration Tests for SNIP-36 Privacy Pool (secp256k1 accounts)
  *
  * Run:  VITE_AVNU_API_KEY=<key> npx tsx test/e2e.ts [step]
  *
@@ -578,7 +578,7 @@ async function withdraw() {
 // ============================================================
 
 async function main() {
-  console.log('SNIP-36 EVM — E2E Integration Tests');
+  console.log('SNIP-36 — E2E Integration Tests');
   console.log('====================================');
 
   if (!AVNU_API_KEY) {

@@ -361,7 +361,7 @@ async function testWithdraw(
 // Main
 // ============================================================
 async function main() {
-  console.log('SNIP-36 EVM — Full E2E Test');
+  console.log('SNIP-36 — Full E2E Test');
   console.log('===========================\n');
 
   const provider = new RpcProvider({ nodeUrl: RPC_URL });
