@@ -467,30 +467,71 @@ async function transfer() {
     await sleep(3000);
   }
 
-  // Build action batch: OpenChannel + OpenSubchannel + Deposit + CreateEncNote
-  // This deposits STRK and creates an encrypted note for B (nets to zero balance).
-  const channelIndex = await getNextChannelIndex(addrA, privacyKeyA);
-  console.log('  Next channel index:', channelIndex);
-  const clientActions = [
-    addrA, privacyKeyA,
-    '4',                                                           // 4 actions
-    // OpenChannel (variant 1): recipient, index, random, salt
-    '1', addrB, channelIndex.toString(), randomFelt(), randomFelt(),
-    // OpenSubchannel (variant 2): recipient, recipient_pub_key, channel_key, index, token, salt
-    '2', addrB, bStarkPubKey, channelKey, '0', STRK_TOKEN_ADDRESS, randomFelt(),
-    // Deposit (variant 5): token, amount
-    '5', STRK_TOKEN_ADDRESS, transferAmount.toString(),
-    // CreateEncNote (variant 3): recipient, recipient_pub_key, token, amount, index, salt
-    '3', addrB, bStarkPubKey, STRK_TOKEN_ADDRESS, transferAmount.toString(), '0', generateRandom120(),
+  // Build action batch. OpenChannel/OpenSubchannel are WriteOnce per recipient —
+  // skip them if the channel to B already exists from a previous run.
+  const noteIndex = await getNextNoteIndex(channelKey, STRK_TOKEN_ADDRESS);
+  console.log('  Next note index for A→B:', noteIndex);
+
+  const actions: string[] = [];
+  let actionCount = 0;
+
+  // Try progressively simpler action sets until compile_actions accepts
+  // Full: OpenChannel + OpenSubchannel + Deposit + CreateEncNote
+  // If channel exists: OpenSubchannel + Deposit + CreateEncNote
+  // If subchannel exists: Deposit + CreateEncNote
+  const variants = [
+    () => {
+      const idx = getNextChannelIndex(addrA, privacyKeyA);
+      return idx.then(channelIndex => ({
+        label: 'OpenChannel + OpenSubchannel + Deposit + CreateEncNote',
+        actions: [
+          '1', addrB, channelIndex.toString(), randomFelt(), randomFelt(),
+          '2', addrB, bStarkPubKey, channelKey, '0', STRK_TOKEN_ADDRESS, randomFelt(),
+          '5', STRK_TOKEN_ADDRESS, transferAmount.toString(),
+          '3', addrB, bStarkPubKey, STRK_TOKEN_ADDRESS, transferAmount.toString(), noteIndex.toString(), generateRandom120(),
+        ],
+        count: 4,
+      }));
+    },
+    () => Promise.resolve({
+      label: 'OpenSubchannel + Deposit + CreateEncNote',
+      actions: [
+        '2', addrB, bStarkPubKey, channelKey, '0', STRK_TOKEN_ADDRESS, randomFelt(),
+        '5', STRK_TOKEN_ADDRESS, transferAmount.toString(),
+        '3', addrB, bStarkPubKey, STRK_TOKEN_ADDRESS, transferAmount.toString(), noteIndex.toString(), generateRandom120(),
+      ],
+      count: 3,
+    }),
+    () => Promise.resolve({
+      label: 'Deposit + CreateEncNote',
+      actions: [
+        '5', STRK_TOKEN_ADDRESS, transferAmount.toString(),
+        '3', addrB, bStarkPubKey, STRK_TOKEN_ADDRESS, transferAmount.toString(), noteIndex.toString(), generateRandom120(),
+      ],
+      count: 2,
+    }),
   ];
 
-  console.log('  Compiling actions...');
-  const serverActions = await provider.callContract({
-    contractAddress: PRIVACY_POOL_ADDRESS,
-    entrypoint: 'compile_actions',
-    calldata: clientActions,
-  });
-  console.log('  Compiled:', serverActions.length, 'server action felts');
+  let clientActions: string[] = [];
+  let serverActions: string[] = [];
+  for (const buildVariant of variants) {
+    const v = await buildVariant();
+    console.log(`  Trying: ${v.label}...`);
+    const candidate = [addrA, privacyKeyA, v.count.toString(), ...v.actions];
+    try {
+      serverActions = [...await provider.callContract({
+        contractAddress: PRIVACY_POOL_ADDRESS,
+        entrypoint: 'compile_actions',
+        calldata: candidate,
+      })];
+      clientActions = candidate;
+      console.log('  Compiled:', serverActions.length, 'server action felts');
+      break;
+    } catch (e: any) {
+      console.log('  Failed:', e.message?.slice(0, 100));
+    }
+  }
+  assert(clientActions.length > 0, 'All action variants failed to compile');
 
   // Prove and execute
   const txHash = await proveAndExecute({
